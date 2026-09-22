@@ -1,0 +1,9 @@
+node_modules/
+dist/
+src-tauri/target/
+*.log
+.idea/
+release/
+scripts/.update-server.env
+__pycache__/
+*.pyc

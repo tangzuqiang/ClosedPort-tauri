@@ -1,0 +1,29 @@
+{
+  "name": "closedport-tauri",
+  "version": "0.3.0",
+  "private": true,
+  "description": "ClosedPort rebuilt with Tauri, React and Rust",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update.ps1"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.4",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "typescript": "^5.4.5",
+    "vite": "^5.3.1"
+  }
+}

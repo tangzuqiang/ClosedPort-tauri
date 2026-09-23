@@ -114,7 +114,8 @@ fn download_installer(manifest: &UpdateManifest) -> Result<PathBuf, String> {
     };
     let path = std::env::temp_dir().join(format!("closedport-setup-{}.{ext}", manifest.version));
     let mut file = File::create(&path).map_err(|e| format!("无法保存安装包：{e}"))?;
-    file.write_all(&bytes).map_err(|e| format!("写入安装包失败：{e}"))?;
+    file.write_all(&bytes)
+        .map_err(|e| format!("写入安装包失败：{e}"))?;
     Ok(path)
 }
 
@@ -248,7 +249,9 @@ fn orphan_via_cim(command_line: &str) -> Result<(), String> {
         ),
     ]);
     hide_window(&mut cmd);
-    let status = cmd.status().map_err(|e| format!("无法通过 WMI 启动更新：{e}"))?;
+    let status = cmd
+        .status()
+        .map_err(|e| format!("无法通过 WMI 启动更新：{e}"))?;
     if status.success() {
         Ok(())
     } else {
@@ -260,7 +263,9 @@ fn orphan_via_wmic(command_line: &str) -> Result<(), String> {
     let mut cmd = Command::new("wmic");
     cmd.args(["process", "call", "create", command_line]);
     hide_window(&mut cmd);
-    let status = cmd.status().map_err(|e| format!("无法通过 WMIC 启动更新：{e}"))?;
+    let status = cmd
+        .status()
+        .map_err(|e| format!("无法通过 WMIC 启动更新：{e}"))?;
     if status.success() {
         Ok(())
     } else {

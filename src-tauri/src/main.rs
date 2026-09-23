@@ -1,1 +1,5 @@
-fn main() { closedport_lib::run(); }
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
+fn main() {
+    closedport_lib::run();
+}

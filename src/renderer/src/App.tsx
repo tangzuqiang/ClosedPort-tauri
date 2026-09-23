@@ -2493,7 +2493,7 @@ const TerminalView: React.FC<{ session: TerminalSessionView; active: boolean }> 
     };
     const observer = new ResizeObserver(resize);
     observer.observe(containerRef.current);
-    requestAnimationFrame(() => { resize(); window.closedport.writeTerminal(session.id, '\r'); });
+    requestAnimationFrame(resize);
     return () => {
       observer.disconnect(); input.dispose(); removeData(); removeExit(); terminal.dispose();
       window.closedport.closeTerminal(session.id);

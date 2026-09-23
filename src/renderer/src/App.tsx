@@ -5,6 +5,7 @@ import type {
   StartupEntry,
   StartupSource,
   HostEntry,
+  HostProfile,
   ScriptCommand,
   ScriptStreamEvent,
   SystemInfo,
@@ -2560,24 +2561,39 @@ const EMPTY_HOST = { address: '', hostnames: '', comment: '', enabled: true };
 
 const HostsView: React.FC<{ systemInfo: SystemInfo | null }> = ({ systemInfo }) => {
   const t = useT();
+  const { lang } = React.useContext(LanguageContext);
   const [rows, setRows] = useState<HostEntry[]>([]);
+  const [profiles, setProfiles] = useState<HostProfile[]>([]);
+  const [selectedProfileId, setSelectedProfileId] = useState('');
   const [filter, setFilter] = useState('');
   const [hostsPath, setHostsPath] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [hostNotice, setHostNotice] = useState('');
   const [editingId, setEditingId] = useState<string | null | undefined>(undefined);
   const [form, setForm] = useState(EMPTY_HOST);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkText, setBulkText] = useState('');
 
+  const loadProfiles = useCallback(async () => {
+    try {
+      const items = await window.closedport.listHostProfiles();
+      setProfiles(items);
+      setSelectedProfileId((current) => current && items.some((item) => item.id === current)
+        ? current
+        : (items.find((item) => item.isActive)?.id || items[0]?.id || ''));
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, []);
   const refresh = useCallback(async () => {
+    if (!selectedProfileId) return;
     setLoading(true); setError('');
     try {
-      const result = await window.closedport.listHosts();
+      const result = await window.closedport.listHosts(selectedProfileId);
       setRows(result.entries); setHostsPath(result.path);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setLoading(false); }
-  }, []);
+  }, [selectedProfileId]);
+  useEffect(() => { void loadProfiles(); }, [loadProfiles]);
   useEffect(() => { void refresh(); }, [refresh]);
 
   const filtered = useMemo(() => {
@@ -2591,20 +2607,24 @@ const HostsView: React.FC<{ systemInfo: SystemInfo | null }> = ({ systemInfo }) 
     setForm(row ? { address: row.address, hostnames: row.hostnames.join(' '), comment: row.comment, enabled: row.enabled } : EMPTY_HOST);
   };
   const save = async () => {
-    const result = await window.closedport.saveHost(editingId ?? null, {
+    setError(''); setHostNotice('');
+    const result = await window.closedport.saveHost(selectedProfileId, editingId ?? null, {
       address: form.address,
       hostnames: form.hostnames.trim().split(/[\s,]+/).filter(Boolean),
       comment: form.comment,
       enabled: form.enabled
     });
     if (!result.success) { setError(result.message || t('hosts.saveFailed')); return; }
+    setHostNotice(lang === 'zh' ? '条目已保存到当前配置。' : 'Entry saved to the current profile.');
     setEditingId(undefined); await refresh();
   };
   const toggle = async (row: HostEntry) => {
-    const result = await window.closedport.saveHost(row.id, { ...row, enabled: !row.enabled });
-    if (!result.success) setError(result.message || t('hosts.saveFailed')); else await refresh();
+    setError(''); setHostNotice('');
+    const result = await window.closedport.saveHost(selectedProfileId, row.id, { ...row, enabled: !row.enabled });
+    if (!result.success) setError(result.message || t('hosts.saveFailed')); else { setHostNotice(lang === 'zh' ? '状态已保存到当前配置。' : 'State saved to the current profile.'); await refresh(); }
   };
   const saveBulk = async () => {
+    setError(''); setHostNotice('');
     const inputs = [];
     const sourceLines = bulkText.split(/\r?\n/);
     for (let index = 0; index < sourceLines.length; index++) {
@@ -2625,18 +2645,56 @@ const HostsView: React.FC<{ systemInfo: SystemInfo | null }> = ({ systemInfo }) 
       inputs.push({ address: columns[0], hostnames: columns.slice(1), comment, enabled });
     }
     if (inputs.length === 0) { setError(t('hosts.bulkEmpty')); return; }
-    const result = await window.closedport.saveHosts(inputs);
+    const result = await window.closedport.saveHosts(selectedProfileId, inputs);
     if (!result.success) { setError(result.message || t('hosts.saveFailed')); return; }
+    setHostNotice(lang === 'zh' ? `已向当前配置追加 ${inputs.length} 条记录。` : `Appended ${inputs.length} entries to the current profile.`);
     setBulkText(''); setBulkOpen(false); await refresh();
   };
   const remove = async (row: HostEntry) => {
     if (!confirm(t('hosts.deleteConfirm').replace('{host}', row.hostnames.join(' ')))) return;
-    const result = await window.closedport.deleteHost(row.id);
-    if (!result.success) setError(result.message || t('hosts.deleteFailed')); else await refresh();
+    setError(''); setHostNotice('');
+    const result = await window.closedport.deleteHost(selectedProfileId, row.id);
+    if (!result.success) setError(result.message || t('hosts.deleteFailed')); else { setHostNotice(lang === 'zh' ? '记录已从当前配置删除。' : 'Entry deleted from the current profile.'); await refresh(); }
+  };
+  const createProfile = async () => {
+    const name = prompt(lang === 'zh' ? '新配置名称' : 'New profile name');
+    if (!name?.trim()) return;
+    try { const item = await window.closedport.createHostProfile(name); await loadProfiles(); setSelectedProfileId(item.id); setHostNotice(lang === 'zh' ? '配置已创建。' : 'Profile created.'); }
+    catch (e) { setError(String(e)); }
+  };
+  const renameProfile = async () => {
+    const current = profiles.find((item) => item.id === selectedProfileId); if (!current) return;
+    const name = prompt(lang === 'zh' ? '修改配置名称' : 'Rename profile', current.name); if (!name?.trim()) return;
+    const result = await window.closedport.renameHostProfile(current.id, name);
+    if (!result.success) setError(result.message || 'Rename failed'); else { await loadProfiles(); setHostNotice(lang === 'zh' ? '配置已重命名。' : 'Profile renamed.'); }
+  };
+  const removeProfile = async () => {
+    const current = profiles.find((item) => item.id === selectedProfileId); if (!current) return;
+    if (!confirm((lang === 'zh' ? '删除配置“{name}”？' : 'Delete profile "{name}"?').replace('{name}', current.name))) return;
+    const result = await window.closedport.deleteHostProfile(current.id);
+    if (!result.success) setError(result.message || 'Delete failed'); else { setSelectedProfileId(''); await loadProfiles(); setHostNotice(lang === 'zh' ? '配置已删除。' : 'Profile deleted.'); }
+  };
+  const applyProfile = async () => {
+    setError(''); setHostNotice('');
+    const result = await window.closedport.activateHostProfile(selectedProfileId);
+    if (!result.success) setError(result.message || t('hosts.saveFailed'));
+    else { await loadProfiles(); setHostNotice(lang === 'zh' ? '配置已应用到系统 hosts 并校验成功。' : 'Profile applied to the system hosts and verified.'); }
   };
 
   return <>
     <div className="toolbar">
+      <label className="host-profile-picker" title={lang === 'zh' ? '选择 hosts 配置' : 'Select hosts profile'}>
+        <span className="host-profile-icon" aria-hidden="true">◇</span>
+        <span className="host-profile-caption">{lang === 'zh' ? '配置' : 'Profile'}</span>
+        <select value={selectedProfileId} onChange={(event) => setSelectedProfileId(event.target.value)} aria-label={lang === 'zh' ? 'hosts 配置' : 'Hosts profile'}>
+          {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+        </select>
+        <span className="host-profile-arrow" aria-hidden="true">⌄</span>
+      </label>
+      <button onClick={() => void createProfile()}>{lang === 'zh' ? '新建配置' : 'New profile'}</button>
+      <button onClick={() => void renameProfile()} disabled={!selectedProfileId}>{lang === 'zh' ? '重命名' : 'Rename'}</button>
+      <button className="danger" onClick={() => void removeProfile()} disabled={!selectedProfileId}>{lang === 'zh' ? '删除配置' : 'Delete profile'}</button>
+      <button className="primary" onClick={() => void applyProfile()} disabled={!selectedProfileId}>{lang === 'zh' ? '应用配置' : 'Apply profile'}</button>
       <input type="search" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder={t('hosts.filter')} style={{ maxWidth: 360 }} />
       <button className="primary" onClick={() => openForm()}>{t('hosts.add')}</button>
       <button onClick={() => { setBulkOpen(true); setEditingId(undefined); }}>{t('hosts.bulkAdd')}</button>
@@ -2646,6 +2704,7 @@ const HostsView: React.FC<{ systemInfo: SystemInfo | null }> = ({ systemInfo }) 
       {!systemInfo?.isAdmin && <span className="badge warn" title={t('hosts.adminHint')}>{t('common.standard')}</span>}
     </div>
     {error && <div className="banner warn">{error}<button className="ghost" onClick={() => setError('')}>×</button></div>}
+    {hostNotice && <div className="banner ok">{hostNotice}<button className="ghost" onClick={() => setHostNotice('')}>×</button></div>}
     {editingId !== undefined && <div className="host-editor">
       <strong>{editingId === null ? t('hosts.addTitle') : t('hosts.editTitle')}</strong>
       <input type="text" value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} placeholder={t('hosts.addressPlaceholder')} />

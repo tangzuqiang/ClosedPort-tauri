@@ -1,5 +1,6 @@
 use parking_lot::Mutex;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
@@ -611,6 +612,14 @@ struct HostList {
     path: String,
     captured_at: u64,
 }
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HostProfile {
+    id: String,
+    name: String,
+    is_active: bool,
+    created_at: u64,
+}
 fn hosts_path() -> PathBuf {
     if cfg!(windows) {
         PathBuf::from(r"C:\Windows\System32\drivers\etc\hosts")
@@ -618,114 +627,374 @@ fn hosts_path() -> PathBuf {
         PathBuf::from("/etc/hosts")
     }
 }
-fn parse_hosts() -> Vec<HostEntry> {
-    fs::read_to_string(hosts_path())
-        .unwrap_or_default()
-        .lines()
-        .enumerate()
-        .filter_map(|(i, l)| {
-            let t = l.trim();
-            if t.is_empty() || t.starts_with('#') {
-                return None;
-            }
-            let mut halves = t.splitn(2, " #");
-            let fields = halves.next()?.split_whitespace().collect::<Vec<_>>();
-            if fields.len() < 2 {
-                return None;
-            }
-            Some(HostEntry {
-                id: i.to_string(),
-                address: fields[0].into(),
-                hostnames: fields[1..].iter().map(|x| x.to_string()).collect(),
-                comment: halves.next().unwrap_or("").into(),
-                enabled: true,
+fn read_hosts() -> Result<String, String> {
+    fs::read_to_string(hosts_path()).map_err(|e| format!("无法读取 hosts 文件：{e}"))
+}
+fn format_host(input: &HostMutation) -> Result<String, String> {
+    if input.address.trim().is_empty() || input.hostnames.is_empty() {
+        return Err("地址和主机名不能为空".into());
+    }
+    if input.address.contains(['\r', '\n', '#'])
+        || input
+            .hostnames
+            .iter()
+            .any(|name| name.trim().is_empty() || name.contains(['\r', '\n', '#']))
+        || input.comment.contains(['\r', '\n'])
+    {
+        return Err("hosts 条目包含非法换行或注释符".into());
+    }
+    Ok(format!(
+        "{}{} {}{}",
+        if input.enabled {
+            ""
+        } else {
+            "# closedport-disabled "
+        },
+        input.address.trim(),
+        input
+            .hostnames
+            .iter()
+            .map(|name| name.trim())
+            .collect::<Vec<_>>()
+            .join(" "),
+        if input.comment.trim().is_empty() {
+            String::new()
+        } else {
+            format!(" # {}", input.comment.trim())
+        }
+    ))
+}
+fn write_hosts_text(content: &str) -> Result<String, String> {
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    if system.processes().values().any(|process| {
+        process
+            .name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case("Steam++.Accelerator.exe")
+    }) {
+        return Err(
+            "Steam++ 加速器正在以 Hosts 模式接管系统 hosts。请先在 Steam++ 停止加速或切换为非 Hosts 代理模式，再保存。"
+                .into(),
+        );
+    }
+    let path = hosts_path();
+    let backup = path.with_file_name("hosts.closedport.bak");
+    if !backup.exists() {
+        fs::copy(&path, &backup)
+            .map_err(|e| format!("无法创建 hosts 备份 {}：{e}", backup.display()))?;
+    }
+    fs::write(&path, content).map_err(|e| format!("无法写入 hosts（请以管理员身份运行）：{e}"))?;
+    let written = fs::read_to_string(&path).map_err(|e| format!("写入后无法校验 hosts：{e}"))?;
+    if written != content {
+        return Err("hosts 写入校验失败，磁盘内容与预期不一致".into());
+    }
+    // Hosts managers and security tools often rewrite the file immediately
+    // after receiving a filesystem notification. Verify again after the
+    // notification window so the UI never reports a transient write as saved.
+    thread::sleep(Duration::from_millis(1500));
+    let stable = fs::read_to_string(&path).map_err(|e| format!("延迟校验 hosts 失败：{e}"))?;
+    if stable != content {
+        return Err("hosts 保存后被其他程序立即覆盖，请关闭其他 hosts 管理/加速工具后重试".into());
+    }
+    Ok(String::new())
+}
+fn hosts_db(app: &tauri::AppHandle) -> Result<Connection, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&dir).map_err(|e| format!("无法创建数据目录：{e}"))?;
+    let conn =
+        Connection::open(dir.join("closedport.db")).map_err(|e| format!("无法打开 SQLite：{e}"))?;
+    conn.execute_batch(
+        "PRAGMA foreign_keys=ON;
+         CREATE TABLE IF NOT EXISTS host_profiles(
+           id TEXT PRIMARY KEY, name TEXT NOT NULL, is_active INTEGER NOT NULL DEFAULT 0,
+           created_at INTEGER NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS host_entries(
+           id TEXT PRIMARY KEY, profile_id TEXT NOT NULL, address TEXT NOT NULL,
+           hostnames TEXT NOT NULL, comment TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1,
+           sort_order INTEGER NOT NULL DEFAULT 0,
+           FOREIGN KEY(profile_id) REFERENCES host_profiles(id) ON DELETE CASCADE
+         );",
+    ).map_err(|e| format!("初始化 SQLite 失败：{e}"))?;
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM host_profiles", [], |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    if count == 0 {
+        conn.execute(
+            "INSERT INTO host_profiles(id,name,is_active,created_at) VALUES(?1,'默认配置',0,?2)",
+            params![Uuid::new_v4().to_string(), now() as i64],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(conn)
+}
+fn resolve_profile(conn: &Connection, profile_id: Option<String>) -> Result<String, String> {
+    if let Some(id) = profile_id {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM host_profiles WHERE id=?1",
+                [&id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if exists > 0 {
+            return Ok(id);
+        }
+    }
+    conn.query_row(
+        "SELECT id FROM host_profiles ORDER BY is_active DESC,created_at ASC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(|e| format!("没有可用的 hosts 配置：{e}"))
+}
+#[tauri::command]
+fn list_host_profiles(app: tauri::AppHandle) -> Result<Vec<HostProfile>, String> {
+    let conn = hosts_db(&app)?;
+    let mut stmt = conn.prepare("SELECT id,name,is_active,created_at FROM host_profiles ORDER BY is_active DESC,created_at ASC").map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(HostProfile {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                is_active: row.get::<_, i64>(2)? != 0,
+                created_at: row.get::<_, i64>(3)? as u64,
             })
         })
-        .collect()
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 #[tauri::command]
-fn list_hosts() -> HostList {
-    HostList {
-        entries: parse_hosts(),
+fn create_host_profile(app: tauri::AppHandle, name: String) -> Result<HostProfile, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("配置名称不能为空".into());
+    }
+    let conn = hosts_db(&app)?;
+    let profile = HostProfile {
+        id: Uuid::new_v4().to_string(),
+        name: name.into(),
+        is_active: false,
+        created_at: now(),
+    };
+    conn.execute(
+        "INSERT INTO host_profiles(id,name,is_active,created_at) VALUES(?1,?2,0,?3)",
+        params![profile.id, profile.name, profile.created_at as i64],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(profile)
+}
+#[tauri::command]
+fn rename_host_profile(app: tauri::AppHandle, id: String, name: String) -> Mutation {
+    let result = (|| -> Result<String, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("配置名称不能为空".into());
+        }
+        let conn = hosts_db(&app)?;
+        if conn
+            .execute(
+                "UPDATE host_profiles SET name=?1 WHERE id=?2",
+                params![name, id],
+            )
+            .map_err(|e| e.to_string())?
+            == 0
+        {
+            return Err("配置不存在".into());
+        }
+        Ok(String::new())
+    })();
+    mutation(result)
+}
+#[tauri::command]
+fn delete_host_profile(app: tauri::AppHandle, id: String) -> Mutation {
+    let result = (|| -> Result<String, String> {
+        let conn = hosts_db(&app)?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM host_profiles", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if count <= 1 {
+            return Err("至少保留一套配置".into());
+        }
+        let active: i64 = conn
+            .query_row(
+                "SELECT is_active FROM host_profiles WHERE id=?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .map_err(|_| "配置不存在".to_string())?;
+        if active != 0 {
+            return Err("当前已应用的配置不能删除".into());
+        }
+        conn.execute("DELETE FROM host_profiles WHERE id=?1", [id])
+            .map_err(|e| e.to_string())?;
+        Ok(String::new())
+    })();
+    mutation(result)
+}
+#[tauri::command]
+fn list_hosts(app: tauri::AppHandle, profile_id: Option<String>) -> Result<HostList, String> {
+    let conn = hosts_db(&app)?;
+    let profile = resolve_profile(&conn, profile_id)?;
+    let mut stmt=conn.prepare("SELECT id,address,hostnames,comment,enabled FROM host_entries WHERE profile_id=?1 ORDER BY sort_order,rowid").map_err(|e|e.to_string())?;
+    let entries = stmt
+        .query_map([profile], |row| {
+            let names: String = row.get(2)?;
+            Ok(HostEntry {
+                id: row.get(0)?,
+                address: row.get(1)?,
+                hostnames: serde_json::from_str(&names).unwrap_or_default(),
+                comment: row.get(3)?,
+                enabled: row.get::<_, i64>(4)? != 0,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    Ok(HostList {
+        entries,
         path: hosts_path().to_string_lossy().into_owned(),
         captured_at: now(),
-    }
+    })
 }
-fn write_hosts(inputs: Vec<HostMutation>) -> Mutation {
-    let managed = inputs
-        .iter()
-        .map(|x| {
-            format!(
-                "{}{} {}{}",
-                if x.enabled { "" } else { "# " },
-                x.address,
-                x.hostnames.join(" "),
-                if x.comment.is_empty() {
-                    "".into()
-                } else {
-                    format!(" # {}", x.comment)
-                }
+#[tauri::command]
+fn save_hosts(
+    app: tauri::AppHandle,
+    profile_id: Option<String>,
+    inputs: Vec<HostMutation>,
+) -> Mutation {
+    let result = (|| -> Result<String, String> {
+        let mut conn = hosts_db(&app)?;
+        let profile = resolve_profile(&conn, profile_id)?;
+        for input in &inputs {
+            format_host(input)?;
+        }
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let start: i64 = tx
+            .query_row(
+                "SELECT COALESCE(MAX(sort_order),-1)+1 FROM host_entries WHERE profile_id=?1",
+                [&profile],
+                |r| r.get(0),
             )
-        })
-        .collect::<Vec<_>>()
-        .join("\r\n");
-    let p = hosts_path();
-    let old = fs::read_to_string(&p).unwrap_or_default();
-    let start = "# ClosedPort managed entries";
-    let base = old.split(start).next().unwrap_or(&old).trim_end();
-    mutation(
-        fs::write(p, format!("{}\r\n\r\n{}\r\n{}\r\n", base, start, managed))
-            .map(|_| String::new())
-            .map_err(|e| e.to_string()),
-    )
+            .map_err(|e| e.to_string())?;
+        for (index, input) in inputs.iter().enumerate() {
+            tx.execute("INSERT INTO host_entries(id,profile_id,address,hostnames,comment,enabled,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![Uuid::new_v4().to_string(),profile,input.address.trim(),serde_json::to_string(&input.hostnames).unwrap(),input.comment.trim(),input.enabled as i32,start+index as i64]).map_err(|e|e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(String::new())
+    })();
+    mutation(result)
 }
 #[tauri::command]
-fn save_hosts(inputs: Vec<HostMutation>) -> Mutation {
-    write_hosts(inputs)
-}
-#[tauri::command]
-fn save_host(id: Option<String>, input: HostMutation) -> Mutation {
-    let mut all = parse_hosts()
-        .into_iter()
-        .map(|x| HostMutation {
-            address: x.address,
-            hostnames: x.hostnames,
-            comment: x.comment,
-            enabled: x.enabled,
-        })
-        .collect::<Vec<_>>();
-    if let Some(i) = id.and_then(|x| x.parse::<usize>().ok()) {
-        if i < all.len() {
-            all[i] = input
+fn save_host(
+    app: tauri::AppHandle,
+    profile_id: Option<String>,
+    id: Option<String>,
+    input: HostMutation,
+) -> Mutation {
+    let result = (|| -> Result<String, String> {
+        format_host(&input)?;
+        let conn = hosts_db(&app)?;
+        let profile = resolve_profile(&conn, profile_id)?;
+        if let Some(id) = id {
+            if conn.execute("UPDATE host_entries SET address=?1,hostnames=?2,comment=?3,enabled=?4 WHERE id=?5 AND profile_id=?6",params![input.address.trim(),serde_json::to_string(&input.hostnames).unwrap(),input.comment.trim(),input.enabled as i32,id,profile]).map_err(|e|e.to_string())?==0{return Err("配置条目不存在".into())}
         } else {
-            all.push(input)
+            let order: i64 = conn
+                .query_row(
+                    "SELECT COALESCE(MAX(sort_order),-1)+1 FROM host_entries WHERE profile_id=?1",
+                    [&profile],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            conn.execute("INSERT INTO host_entries(id,profile_id,address,hostnames,comment,enabled,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![Uuid::new_v4().to_string(),profile,input.address.trim(),serde_json::to_string(&input.hostnames).unwrap(),input.comment.trim(),input.enabled as i32,order]).map_err(|e|e.to_string())?;
         }
-    } else {
-        all.push(input)
-    }
-    write_hosts(all)
+        Ok(String::new())
+    })();
+    mutation(result)
 }
 #[tauri::command]
-fn delete_host(id: String) -> Mutation {
-    let i = id.parse::<usize>().unwrap_or(usize::MAX);
-    let mut all = parse_hosts()
-        .into_iter()
-        .map(|x| HostMutation {
-            address: x.address,
-            hostnames: x.hostnames,
-            comment: x.comment,
-            enabled: x.enabled,
-        })
-        .collect::<Vec<_>>();
-    if i < all.len() {
-        all.remove(i);
-        write_hosts(all)
-    } else {
-        Mutation {
-            success: false,
-            message: Some("Invalid id".into()),
+fn delete_host(app: tauri::AppHandle, profile_id: Option<String>, id: String) -> Mutation {
+    let result = (|| -> Result<String, String> {
+        let conn = hosts_db(&app)?;
+        let profile = resolve_profile(&conn, profile_id)?;
+        if conn
+            .execute(
+                "DELETE FROM host_entries WHERE id=?1 AND profile_id=?2",
+                params![id, profile],
+            )
+            .map_err(|e| e.to_string())?
+            == 0
+        {
+            return Err("配置条目不存在".into());
         }
-    }
+        Ok(String::new())
+    })();
+    mutation(result)
+}
+#[tauri::command]
+fn activate_host_profile(app: tauri::AppHandle, id: String) -> Mutation {
+    let result = (|| -> Result<String, String> {
+        let mut conn = hosts_db(&app)?;
+        let profile = resolve_profile(&conn, Some(id))?;
+        let inputs = {
+            let mut stmt=conn.prepare("SELECT address,hostnames,comment,enabled FROM host_entries WHERE profile_id=?1 ORDER BY sort_order,rowid").map_err(|e|e.to_string())?;
+            let rows = stmt
+                .query_map([&profile], |row| {
+                    let names: String = row.get(1)?;
+                    Ok(HostMutation {
+                        address: row.get(0)?,
+                        hostnames: serde_json::from_str(&names).unwrap_or_default(),
+                        comment: row.get(2)?,
+                        enabled: row.get::<_, i64>(3)? != 0,
+                    })
+                })
+                .map_err(|e| e.to_string())?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(|e| e.to_string())?
+        };
+        let old = read_hosts()?;
+        let newline = if old.contains("\r\n") { "\r\n" } else { "\n" };
+        let mut kept = Vec::new();
+        let mut inside = false;
+        for line in old.lines() {
+            if line.trim() == "# ClosedPort profile start" {
+                inside = true;
+                continue;
+            }
+            if line.trim() == "# ClosedPort profile end" {
+                inside = false;
+                continue;
+            }
+            if !inside {
+                kept.push(line.to_string())
+            }
+        }
+        while kept.last().is_some_and(|line| line.trim().is_empty()) {
+            kept.pop();
+        }
+        kept.push(String::new());
+        kept.push("# ClosedPort profile start".into());
+        for input in &inputs {
+            kept.push(format_host(input)?);
+        }
+        kept.push("# ClosedPort profile end".into());
+        let mut next = kept.join(newline);
+        next.push_str(newline);
+        write_hosts_text(&next)?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        tx.execute("UPDATE host_profiles SET is_active=0", [])
+            .map_err(|e| e.to_string())?;
+        tx.execute(
+            "UPDATE host_profiles SET is_active=1 WHERE id=?1",
+            [profile],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(String::new())
+    })();
+    mutation(result)
 }
 
 struct TerminalSession {
@@ -1074,6 +1343,11 @@ pub fn run() {
             set_startup_enabled,
             update_startup,
             delete_startup,
+            list_host_profiles,
+            create_host_profile,
+            rename_host_profile,
+            delete_host_profile,
+            activate_host_profile,
             list_hosts,
             save_host,
             save_hosts,

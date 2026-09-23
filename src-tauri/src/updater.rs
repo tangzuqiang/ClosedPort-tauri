@@ -74,10 +74,25 @@ fn fetch_manifest() -> Result<UpdateManifest, String> {
     if !(200..300).contains(&status) {
         return Err(format!("更新服务器返回 {status}"));
     }
-    response
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let body = response
         .body_mut()
-        .read_json::<UpdateManifest>()
-        .map_err(|e| format!("更新清单无法解析：{e}"))
+        .read_to_string()
+        .map_err(|e| format!("无法读取更新清单：{e}"))?;
+    if content_type.contains("text/html") || body.trim_start().starts_with("<!DOCTYPE html") {
+        return Err(format!(
+            "更新服务器返回了网页而不是 JSON，请配置 /closedport/ 静态目录：{UPDATE_FEED_URL}"
+        ));
+    }
+    serde_json::from_str::<UpdateManifest>(&body).map_err(|e| {
+        let preview: String = body.chars().take(120).collect();
+        format!("更新清单 JSON 格式错误：{e}；响应开头：{preview}")
+    })
 }
 
 fn download_installer(manifest: &UpdateManifest) -> Result<PathBuf, String> {

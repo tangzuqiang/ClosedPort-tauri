@@ -1,6 +1,6 @@
 {
   "name": "closedport-tauri",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "ClosedPort rebuilt with Tauri, React and Rust",
   "scripts": {
@@ -9,7 +9,8 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
-    "update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update.ps1"
+    "update": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/update.ps1",
+    "update:setup": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup-update-server.ps1"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

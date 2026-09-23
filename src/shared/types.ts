@@ -196,6 +196,7 @@ export interface HostEntry {
 export interface HostListResult { entries: HostEntry[]; path: string; capturedAt: number; }
 export interface HostMutation { address: string; hostnames: string[]; comment: string; enabled: boolean; }
 export interface HostMutationResult { success: boolean; message?: string; }
+export interface HostProfile { id: string; name: string; isActive: boolean; createdAt: number; }
 
 export interface ScriptCommand {
   id: string;
@@ -244,10 +245,15 @@ export interface ApiSurface {
   setStartupEnabled(id: string, enabled: boolean): Promise<StartupMutationResult>;
   updateStartup(id: string, command: string): Promise<StartupMutationResult>;
   deleteStartup(id: string): Promise<StartupMutationResult>;
-  listHosts(): Promise<HostListResult>;
-  saveHost(id: string | null, input: HostMutation): Promise<HostMutationResult>;
-  saveHosts(inputs: HostMutation[]): Promise<HostMutationResult>;
-  deleteHost(id: string): Promise<HostMutationResult>;
+  listHostProfiles(): Promise<HostProfile[]>;
+  createHostProfile(name: string): Promise<HostProfile>;
+  renameHostProfile(id: string, name: string): Promise<HostMutationResult>;
+  deleteHostProfile(id: string): Promise<HostMutationResult>;
+  activateHostProfile(id: string): Promise<HostMutationResult>;
+  listHosts(profileId?: string): Promise<HostListResult>;
+  saveHost(profileId: string, id: string | null, input: HostMutation): Promise<HostMutationResult>;
+  saveHosts(profileId: string, inputs: HostMutation[]): Promise<HostMutationResult>;
+  deleteHost(profileId: string, id: string): Promise<HostMutationResult>;
   createTerminal(): Promise<string>;
   writeTerminal(id: string, data: string): void;
   resizeTerminal(id: string, cols: number, rows: number): void;

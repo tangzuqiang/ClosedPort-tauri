@@ -20,6 +20,7 @@ use tauri::{
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
 
+mod batch;
 mod updater;
 
 fn now() -> u64 {
@@ -1297,6 +1298,7 @@ pub fn run() {
             }
         }))
         .manage(AppState::default())
+        .manage(batch::BatchState::default())
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 window.set_title(&format!("ClosedPort {}", updater::current_version()))?;
@@ -1361,6 +1363,12 @@ pub fn run() {
             delete_script,
             execute_script,
             stop_script,
+            batch::list_batch_commands,
+            batch::save_batch_command,
+            batch::add_batch_commands,
+            batch::delete_batch_commands,
+            batch::start_batch_commands,
+            batch::stop_batch_commands,
             write_clipboard_text,
             check_update,
             install_update,

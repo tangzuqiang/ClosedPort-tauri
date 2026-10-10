@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ApiSurface, HostMutation, ScanFolderOptions, ScriptStreamEvent } from '../../shared/types';
+import type { ApiSurface, BatchStreamEvent, HostMutation, ScanFolderOptions, ScriptStreamEvent } from '../../shared/types';
 
 const listeners = <T>(event: string, callback: (payload: T) => void): (() => void) => {
   let disposed = false;
@@ -54,6 +54,13 @@ export const tauriApi: ApiSurface = {
   executeScript: (id) => invoke('execute_script', { id }),
   stopScript: (executionId) => { void invoke('stop_script', { executionId }); },
   onScriptEvent: (callback) => listeners<ScriptStreamEvent>('script-event', callback),
+  listBatchCommands: () => invoke('list_batch_commands'),
+  saveBatchCommand: (id, input) => invoke('save_batch_command', { id, input }),
+  addBatchCommands: (inputs) => invoke('add_batch_commands', { inputs }),
+  deleteBatchCommands: (ids) => invoke('delete_batch_commands', { ids }),
+  startBatchCommands: (ids, restart = false) => invoke('start_batch_commands', { ids, restart }),
+  stopBatchCommands: (ids) => invoke('stop_batch_commands', { ids }),
+  onBatchEvent: (callback) => listeners<BatchStreamEvent>('batch-event', callback),
   resolveDroppedPath: (file: File) => (file as File & { path?: string }).path ?? ''
 };
 

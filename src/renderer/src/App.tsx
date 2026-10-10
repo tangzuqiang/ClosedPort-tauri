@@ -8,6 +8,9 @@ import type {
   HostProfile,
   ScriptCommand,
   ScriptStreamEvent,
+  BatchCommand,
+  BatchCommandInput,
+  BatchStreamEvent,
   SystemInfo,
   SystemMemoryInfo,
   UpdateInfo
@@ -35,7 +38,7 @@ type ViewMode = 'flat' | 'grouped';
 type GroupSortKey = 'name' | 'ports' | 'pids';
 
 const App: React.FC = () => {
-  const [tab, setTab] = useState<'ports' | 'folder' | 'processes' | 'startup' | 'hosts' | 'scripts'>(
+  const [tab, setTab] = useState<'ports' | 'folder' | 'processes' | 'startup' | 'hosts' | 'scripts' | 'batch'>(
     'ports'
   );
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -165,6 +168,9 @@ const App: React.FC = () => {
           <div className={`tab ${tab === 'scripts' ? 'active' : ''}`} onClick={() => setTab('scripts')}>
             {t('tab.scripts')}
           </div>
+          <div className={`tab ${tab === 'batch' ? 'active' : ''}`} onClick={() => setTab('batch')}>
+            {t('tab.batch')}
+          </div>
         </div>
         <div className="spacer" />
         {systemInfo && (
@@ -263,6 +269,9 @@ const App: React.FC = () => {
       </div>
       <div className="tab-pane" style={{ display: tab === 'scripts' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         <ScriptsView />
+      </div>
+      <div className="tab-pane" style={{ display: tab === 'batch' ? 'flex' : 'none', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+        <BatchView />
       </div>
       {systemInfo?.platform === 'win32' && (
         <TerminalPanel visible={terminalOpen} onHide={() => setTerminalOpen(false)} />
@@ -2855,6 +2864,300 @@ const ScriptsView: React.FC = () => {
             <pre>{event.type === 'exit' ? `${t('scripts.exitCode')}: ${event.exitCode}` : event.data}</pre>
           </div>)}
         </div>
+      </section>
+    </div>
+  </div>;
+};
+
+type BatchForm = BatchCommandInput & { id: string | null };
+const EMPTY_BATCH_FORM: BatchForm = { id: null, name: '', command: '', cwd: '', killBeforeStart: true };
+const BATCH_LOG_LIMIT = 3000;
+const BATCH_OVERVIEW = '__overview__';
+
+function parseBatchLines(text: string): Array<{ name: string; command: string }> {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map((line) => {
+      const sep = line.indexOf('::');
+      if (sep > 0) return { name: line.slice(0, sep).trim(), command: line.slice(sep + 2).trim() };
+      return { name: line.length > 40 ? `${line.slice(0, 40)}…` : line, command: line };
+    })
+    .filter((item) => item.command);
+}
+
+const BatchView: React.FC = () => {
+  const t = useT();
+  const [items, setItems] = useState<BatchCommand[]>([]);
+  const [filter, setFilter] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [form, setForm] = useState<BatchForm | null>(null);
+  const [bulk, setBulk] = useState<{ text: string; cwd: string; killBeforeStart: boolean } | null>(null);
+  const [logs, setLogs] = useState<Record<string, BatchStreamEvent[]>>({});
+  const [tabs, setTabs] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState(BATCH_OVERVIEW);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [nowTs, setNowTs] = useState(Date.now());
+  const [fullscreen, setFullscreen] = useState(false);
+  const pending = useRef<BatchStreamEvent[]>([]);
+  const logRef = useRef<HTMLDivElement>(null);
+  const stickBottom = useRef(true);
+
+  const refresh = useCallback(async () => {
+    try { setItems(await window.closedport.listBatchCommands()); }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+  }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  const openTab = useCallback((id: string, focus = true) => {
+    setTabs((current) => (current.includes(id) ? current : [...current, id]));
+    if (focus) setActiveTab(id);
+  }, []);
+
+  useEffect(() => {
+    const unlisten = window.closedport.onBatchEvent((event) => {
+      pending.current.push(event);
+      if (event.type === 'start') {
+        openTab(event.commandId, false);
+        setItems((current) => current.map((item) => item.id === event.commandId
+          ? { ...item, running: true, pid: event.pid, runId: event.runId, startedAt: event.timestamp, lastPid: event.pid, lastStartedAt: event.timestamp, lastExitCode: undefined, lastExitedAt: undefined }
+          : item));
+      } else if (event.type === 'exit') {
+        setItems((current) => current.map((item) => item.id === event.commandId && item.runId === event.runId
+          ? { ...item, running: false, pid: undefined, runId: undefined, lastExitCode: event.exitCode, lastExitedAt: event.timestamp }
+          : item));
+      }
+    });
+    const timer = window.setInterval(() => {
+      if (!pending.current.length) return;
+      const batch = pending.current;
+      pending.current = [];
+      setLogs((current) => {
+        const next = { ...current };
+        for (const event of batch) {
+          const list = next[event.commandId] === current[event.commandId] ? [...(current[event.commandId] || [])] : next[event.commandId];
+          list.push(event);
+          next[event.commandId] = list;
+        }
+        for (const id of new Set(batch.map((event) => event.commandId))) {
+          if (next[id].length > BATCH_LOG_LIMIT) next[id] = next[id].slice(-BATCH_LOG_LIMIT);
+        }
+        return next;
+      });
+    }, 120);
+    return () => { unlisten(); window.clearInterval(timer); };
+  }, [openTab]);
+
+  const anyRunning = items.some((item) => item.running);
+  useEffect(() => {
+    if (!anyRunning) return;
+    const timer = window.setInterval(() => setNowTs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [anyRunning]);
+
+  useEffect(() => {
+    const el = logRef.current;
+    if (el && stickBottom.current) el.scrollTop = el.scrollHeight;
+  }, [logs, activeTab, fullscreen]);
+
+  useEffect(() => {
+    if (!fullscreen) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setFullscreen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [fullscreen]);
+
+  const byId = useMemo(() => new Map(items.map((item) => [item.id, item])), [items]);
+  const filtered = useMemo(() => {
+    const query = filter.trim().toLowerCase();
+    return query ? items.filter((item) => item.name.toLowerCase().includes(query) || item.command.toLowerCase().includes(query)) : items;
+  }, [items, filter]);
+  const selectedIds = useMemo(() => items.filter((item) => selected.has(item.id)).map((item) => item.id), [items, selected]);
+  const allChecked = filtered.length > 0 && filtered.every((item) => selected.has(item.id));
+
+  const toggle = (id: string) => setSelected((current) => {
+    const next = new Set(current);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleAll = () => setSelected(allChecked ? new Set() : new Set(filtered.map((item) => item.id)));
+
+  const act = async (ids: string[], kind: 'start' | 'restart' | 'stop') => {
+    if (!ids.length) return;
+    setBusy(true); setError('');
+    if (kind !== 'stop') { ids.forEach((id) => openTab(id, false)); setActiveTab(ids.length === 1 ? ids[0] : BATCH_OVERVIEW); }
+    try {
+      const results = kind === 'stop'
+        ? await window.closedport.stopBatchCommands(ids)
+        : await window.closedport.startBatchCommands(ids, kind === 'restart');
+      const failed = results.filter((result) => !result.success);
+      if (failed.length) setError(failed.map((result) => `${byId.get(result.id)?.name || result.id}: ${result.message || t('batch.actionFailed')}`).join('；'));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      await refresh();
+    }
+  };
+
+  const save = async () => {
+    if (!form) return;
+    const { id, ...input } = form;
+    const result = await window.closedport.saveBatchCommand(id, { ...input, name: input.name.trim() || input.command.trim().slice(0, 40) });
+    if (!result.success) { setError(result.message || t('scripts.saveFailed')); return; }
+    setForm(null); await refresh();
+  };
+  const bulkParsed = useMemo(() => (bulk ? parseBatchLines(bulk.text) : []), [bulk]);
+  const saveBulk = async () => {
+    if (!bulk || !bulkParsed.length) return;
+    const result = await window.closedport.addBatchCommands(bulkParsed.map((item) => ({ ...item, cwd: bulk.cwd.trim(), killBeforeStart: bulk.killBeforeStart })));
+    if (!result.success) { setError(result.message || t('scripts.saveFailed')); return; }
+    setBulk(null); await refresh();
+  };
+  const remove = async (ids: string[]) => {
+    if (!ids.length) return;
+    const names = ids.map((id) => byId.get(id)?.name || id).join('、');
+    if (!confirm(t('batch.deleteConfirm').replace('{name}', names))) return;
+    const result = await window.closedport.deleteBatchCommands(ids);
+    if (!result.success) { setError(result.message || t('scripts.deleteFailed')); return; }
+    setSelected((current) => new Set([...current].filter((id) => !ids.includes(id))));
+    setTabs((current) => current.filter((id) => !ids.includes(id)));
+    if (ids.includes(activeTab)) setActiveTab(BATCH_OVERVIEW);
+    await refresh();
+  };
+  const closeTab = (id: string) => {
+    setTabs((current) => current.filter((x) => x !== id));
+    if (activeTab === id) setActiveTab(BATCH_OVERVIEW);
+  };
+
+  const statusOf = (item: BatchCommand): { cls: string; text: string } => {
+    if (item.running) return { cls: 'running', text: t('batch.status.running') };
+    if (item.lastExitCode !== undefined && item.lastExitCode !== null) return { cls: item.lastExitCode === 0 ? 'stopped' : 'failed', text: `${t('batch.status.exited')} (${item.lastExitCode})` };
+    if (item.lastExitedAt) return { cls: 'failed', text: t('batch.status.killed') };
+    return { cls: 'idle', text: t('batch.status.idle') };
+  };
+  const uptime = (item: BatchCommand) => (item.running && item.startedAt ? formatDuration(Math.max(0, Math.floor((nowTs - item.startedAt) / 1000))) : '—');
+
+  const rowActions = (item: BatchCommand) => <>
+    {item.running
+      ? <button className="danger" disabled={busy} onClick={() => void act([item.id], 'stop')}>{t('batch.stop')}</button>
+      : <button className="primary" disabled={busy} onClick={() => void act([item.id], 'start')}>{t('batch.start')}</button>}
+    <button disabled={busy} onClick={() => void act([item.id], 'restart')}>{t('batch.restart')}</button>
+  </>;
+
+  const active = activeTab === BATCH_OVERVIEW ? undefined : byId.get(activeTab);
+  const activeLogs = active ? logs[active.id] || [] : [];
+  const overviewItems = tabs.length ? tabs.map((id) => byId.get(id)).filter((x): x is BatchCommand => !!x) : items.filter((item) => item.running);
+
+  return <div className="scripts-view">
+    <div className="toolbar">
+      <input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={t('batch.filter')} style={{ maxWidth: 280 }} />
+      <button className="primary" onClick={() => { setBulk(null); setForm({ ...EMPTY_BATCH_FORM }); }}>{t('batch.add')}</button>
+      <button onClick={() => { setForm(null); setBulk({ text: '', cwd: '', killBeforeStart: true }); }}>{t('batch.bulkAdd')}</button>
+      <button onClick={() => void refresh()}>{t('common.refresh')}</button>
+      <span className="batch-divider" />
+      <button className="primary" disabled={busy || !selectedIds.length} onClick={() => void act(selectedIds, 'start')}>{t('batch.runSelected')}</button>
+      <button disabled={busy || !selectedIds.length} onClick={() => void act(selectedIds, 'restart')}>{t('batch.restartSelected')}</button>
+      <button className="danger" disabled={busy || !selectedIds.length} onClick={() => void act(selectedIds, 'stop')}>{t('batch.stopSelected')}</button>
+      <button className="ghost" disabled={busy || !selectedIds.length} onClick={() => void remove(selectedIds)}>{t('common.delete')}</button>
+      <div className="spacer" />
+      <span className="badge">{selectedIds.length ? `${t('batch.selected')} ${selectedIds.length} / ` : ''}{filtered.length} {t('scripts.entries')}</span>
+    </div>
+    {error && <div className="banner warn">{error}<button className="ghost" onClick={() => setError('')}>×</button></div>}
+    {form && <div className="script-editor batch-editor">
+      <strong>{form.id ? t('scripts.editTitle') : t('scripts.addTitle')}</strong>
+      <input type="text" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder={t('scripts.namePlaceholder')} />
+      <input type="text" value={form.cwd} onChange={(event) => setForm({ ...form, cwd: event.target.value })} placeholder={t('batch.cwdPlaceholder')} />
+      <textarea value={form.command} onChange={(event) => setForm({ ...form, command: event.target.value })} placeholder={t('batch.commandPlaceholder')} />
+      <div className="script-editor-actions">
+        <label className="batch-check"><input type="checkbox" checked={form.killBeforeStart} onChange={(event) => setForm({ ...form, killBeforeStart: event.target.checked })} />{t('batch.killBeforeStart')}</label>
+        <div className="spacer" />
+        <button className="primary" disabled={!form.command.trim()} onClick={() => void save()}>{t('common.apply')}</button>
+        <button onClick={() => setForm(null)}>{t('common.cancel')}</button>
+      </div>
+    </div>}
+    {bulk && <div className="host-bulk-editor">
+      <div className="host-bulk-heading"><strong>{t('batch.bulkTitle')}</strong><span>{t('batch.bulkHint')}</span></div>
+      <textarea value={bulk.text} onChange={(event) => setBulk({ ...bulk, text: event.target.value })} placeholder={'web :: npm run dev\napi :: cargo run -p server\n# comment\nping 127.0.0.1 -t'} />
+      <div className="host-bulk-actions">
+        <input type="text" value={bulk.cwd} onChange={(event) => setBulk({ ...bulk, cwd: event.target.value })} placeholder={t('batch.cwdPlaceholder')} style={{ maxWidth: 360 }} />
+        <label className="batch-check"><input type="checkbox" checked={bulk.killBeforeStart} onChange={(event) => setBulk({ ...bulk, killBeforeStart: event.target.checked })} />{t('batch.killBeforeStart')}</label>
+        <span>{bulkParsed.length} {t('batch.bulkLines')}</span>
+        <div className="spacer" />
+        <button className="primary" disabled={!bulkParsed.length} onClick={() => void saveBulk()}>{t('common.apply')}</button>
+        <button onClick={() => setBulk(null)}>{t('common.cancel')}</button>
+      </div>
+    </div>}
+    <div className="scripts-layout">
+      <div className="scripts-list content">
+        {!filtered.length ? <div className="empty">{t('batch.empty')}</div> : <table className="table"><thead><tr>
+          <th style={{ width: 32 }}><input type="checkbox" checked={allChecked} onChange={toggleAll} /></th>
+          <th>{t('scripts.col.name')}</th><th>{t('scripts.col.command')}</th>
+          <th style={{ width: 96 }}>{t('batch.col.status')}</th><th style={{ width: 70 }}>PID</th>
+          <th style={{ width: 250 }}>{t('scripts.col.action')}</th>
+        </tr></thead><tbody>{filtered.map((item) => {
+          const status = statusOf(item);
+          return <tr key={item.id} className={activeTab === item.id ? 'selected' : ''} onDoubleClick={() => openTab(item.id)}>
+            <td><input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} /></td>
+            <td>{item.name}</td>
+            <td className="mono" title={item.cwd ? `${item.command}\n${t('batch.cwd')}: ${item.cwd}` : item.command}>{item.command}</td>
+            <td><span className={`batch-status ${status.cls}`}>{status.text}</span></td>
+            <td className="mono" title={item.running ? '' : t('batch.lastPid')} style={{ opacity: item.running ? 1 : 0.55 }}>{item.running ? item.pid : item.lastPid ?? '—'}</td>
+            <td><div className="row-actions">
+              {rowActions(item)}
+              <button className="ghost" onClick={() => openTab(item.id)}>{t('batch.view')}</button>
+              <button className="ghost" onClick={() => { setBulk(null); setForm({ id: item.id, name: item.name, command: item.command, cwd: item.cwd, killBeforeStart: item.killBeforeStart }); }}>{t('common.edit')}</button>
+            </div></td>
+          </tr>;
+        })}</tbody></table>}
+      </div>
+      <section className={`script-output ${fullscreen ? 'batch-fullscreen' : ''}`}>
+        <div className="batch-tabs">
+          <button className={`terminal-tab ${activeTab === BATCH_OVERVIEW ? 'active' : ''}`} onClick={() => setActiveTab(BATCH_OVERVIEW)}>{t('batch.overview')}</button>
+          {tabs.map((id) => {
+            const item = byId.get(id);
+            if (!item) return null;
+            return <button key={id} className={`terminal-tab ${activeTab === id ? 'active' : ''}`} onClick={() => setActiveTab(id)} title={item.command}>
+              <span className={`batch-dot ${statusOf(item).cls}`} />
+              <span className="batch-tab-name">{item.name}</span>
+              <span className="terminal-tab-close" onClick={(event) => { event.stopPropagation(); closeTab(id); }}>×</span>
+            </button>;
+          })}
+          <div className="spacer" />
+          <button className="ghost batch-fullscreen-toggle" title={fullscreen ? 'Esc' : ''} onClick={() => setFullscreen((value) => !value)}>
+            {fullscreen ? t('batch.exitFullscreen') : t('batch.fullscreen')}
+          </button>
+        </div>
+        {active ? <>
+          <div className="script-output-header batch-run-info">
+            <span className={`batch-status ${statusOf(active).cls}`}>{statusOf(active).text}</span>
+            <span>PID <b className="mono">{active.running ? active.pid : active.lastPid ?? '—'}</b></span>
+            <span>{t('batch.startedAt')} <b>{active.lastStartedAt ? new Date(active.lastStartedAt).toLocaleTimeString() : '—'}</b></span>
+            <span>{t('batch.uptime')} <b>{uptime(active)}</b></span>
+            <div className="spacer" />
+            {rowActions(active)}
+            <button className="ghost" onClick={() => setLogs((current) => ({ ...current, [active.id]: [] }))}>{t('common.clear')}</button>
+          </div>
+          <div className="script-output-log" ref={logRef} onScroll={(event) => { const el = event.currentTarget; stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
+            {!activeLogs.length ? <div className="empty">{t('scripts.noOutput')}</div> : activeLogs.map((event, index) => <div key={`${event.timestamp}-${index}`} className={`script-event ${event.type}`}>
+              <span className="script-event-time">{new Date(event.timestamp).toLocaleTimeString()}</span>
+              <span className="script-event-type">{event.type}</span>
+              <pre>{event.type === 'exit' ? `${t('scripts.exitCode')}: ${event.exitCode ?? '—'} (PID ${event.pid})` : event.type === 'start' ? `PID ${event.pid} · ${event.data}` : event.data}</pre>
+            </div>)}
+          </div>
+        </> : <div className="script-output-log">
+          {!overviewItems.length ? <div className="empty">{t('batch.noTabs')}</div> : <div className="batch-cards">{overviewItems.map((item) => {
+            const status = statusOf(item);
+            const recent = (logs[item.id] || []).filter((event) => event.type === 'stdout' || event.type === 'stderr').slice(fullscreen ? -12 : -1);
+            return <div key={item.id} className="batch-card" onClick={() => openTab(item.id)}>
+              <div className="batch-card-title"><span className={`batch-dot ${status.cls}`} /><strong>{item.name}</strong><div className="spacer" /><span className={`batch-status ${status.cls}`}>{status.text}</span></div>
+              <div className="batch-card-meta">PID {item.running ? item.pid : item.lastPid ?? '—'} · {t('batch.uptime')} {uptime(item)}</div>
+              <pre className="batch-card-last">{recent.length ? recent.map((event) => event.data).join('\n') : '—'}</pre>
+            </div>;
+          })}</div>}
+        </div>}
       </section>
     </div>
   </div>;

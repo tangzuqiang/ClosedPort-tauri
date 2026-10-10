@@ -259,6 +259,40 @@ export const dicts: Record<Lang, Dict> = {
     ,'scripts.deleteFailed': 'Failed to delete command'
     ,'scripts.executeFailed': 'Failed to execute command'
     ,'scripts.deleteConfirm': 'Delete command “{name}”?'
+    ,'tab.batch': 'Batch'
+    ,'batch.filter': 'Filter by name or command...'
+    ,'batch.add': 'Add command'
+    ,'batch.bulkAdd': 'Bulk add'
+    ,'batch.bulkTitle': 'Bulk add commands'
+    ,'batch.bulkHint': 'One command per line, "name :: command"; lines starting with # are ignored.'
+    ,'batch.bulkLines': 'commands'
+    ,'batch.cwd': 'Working dir'
+    ,'batch.cwdPlaceholder': 'Working directory (optional)'
+    ,'batch.commandPlaceholder': 'cmd command, e.g. npm run dev'
+    ,'batch.killBeforeStart': 'Kill the previous process tree before starting'
+    ,'batch.runSelected': 'Run selected'
+    ,'batch.restartSelected': 'Restart selected'
+    ,'batch.stopSelected': 'Stop selected'
+    ,'batch.selected': 'Selected'
+    ,'batch.col.status': 'Status'
+    ,'batch.status.running': 'Running'
+    ,'batch.status.exited': 'Exited'
+    ,'batch.status.killed': 'Killed'
+    ,'batch.status.idle': 'Not run'
+    ,'batch.start': 'Run'
+    ,'batch.restart': 'Restart'
+    ,'batch.stop': 'Stop'
+    ,'batch.view': 'View'
+    ,'batch.overview': 'Overview'
+    ,'batch.noTabs': 'Run or double-click a command to open its output tab.'
+    ,'batch.empty': 'No batch commands yet.'
+    ,'batch.lastPid': 'PID of the last run'
+    ,'batch.startedAt': 'Started'
+    ,'batch.uptime': 'Uptime'
+    ,'batch.actionFailed': 'Operation failed'
+    ,'batch.deleteConfirm': 'Delete “{name}”?'
+    ,'batch.fullscreen': 'Fullscreen'
+    ,'batch.exitFullscreen': 'Exit fullscreen (Esc)'
   },
   zh: {
     'terminal.title': '终端',
@@ -287,6 +321,40 @@ export const dicts: Record<Lang, Dict> = {
     'scripts.deleteFailed': '删除命令失败',
     'scripts.executeFailed': '执行命令失败',
     'scripts.deleteConfirm': '确认删除命令“{name}”？',
+    'tab.batch': '批量命令行',
+    'batch.filter': '按名称或命令筛选...',
+    'batch.add': '新增命令',
+    'batch.bulkAdd': '批量添加',
+    'batch.bulkTitle': '批量添加命令',
+    'batch.bulkHint': '每行一条，格式“名称 :: 命令”，不写名称则用命令作名称；# 开头的行忽略。',
+    'batch.bulkLines': '条有效命令',
+    'batch.cwd': '工作目录',
+    'batch.cwdPlaceholder': '工作目录（可选）',
+    'batch.commandPlaceholder': 'cmd 命令，例如 npm run dev',
+    'batch.killBeforeStart': '启动前先结束上次的进程树',
+    'batch.runSelected': '执行选中',
+    'batch.restartSelected': '重启选中',
+    'batch.stopSelected': '结束选中',
+    'batch.selected': '已选',
+    'batch.col.status': '状态',
+    'batch.status.running': '运行中',
+    'batch.status.exited': '已退出',
+    'batch.status.killed': '已结束',
+    'batch.status.idle': '未运行',
+    'batch.start': '执行',
+    'batch.restart': '重启',
+    'batch.stop': '结束',
+    'batch.view': '查看',
+    'batch.overview': '总览',
+    'batch.noTabs': '执行或双击某条命令即可打开它的输出标签页。',
+    'batch.empty': '暂无批量命令。',
+    'batch.lastPid': '上次运行的 PID',
+    'batch.startedAt': '启动于',
+    'batch.uptime': '运行时长',
+    'batch.actionFailed': '操作失败',
+    'batch.deleteConfirm': '确认删除“{name}”？',
+    'batch.fullscreen': '全屏',
+    'batch.exitFullscreen': '退出全屏（Esc）',
     'hosts.filter': '按 IP、域名或备注筛选...',
     'hosts.add': '新增映射',
     'hosts.bulkAdd': '批量添加',

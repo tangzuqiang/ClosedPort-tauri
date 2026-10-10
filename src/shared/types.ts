@@ -217,6 +217,43 @@ export interface ScriptStreamEvent {
   exitCode?: number;
 }
 
+export interface BatchCommandInput {
+  name: string;
+  command: string;
+  cwd: string;
+  killBeforeStart: boolean;
+}
+export interface BatchCommand extends BatchCommandInput {
+  id: string;
+  createdAt: number;
+  updatedAt: number;
+  /** PID of the most recent run, persisted across app restarts. */
+  lastPid?: number;
+  lastStartedAt?: number;
+  lastExitedAt?: number;
+  lastExitCode?: number;
+  running: boolean;
+  pid?: number;
+  runId?: string;
+  startedAt?: number;
+}
+export interface BatchActionResult {
+  id: string;
+  success: boolean;
+  message?: string;
+  pid?: number;
+  runId?: string;
+}
+export interface BatchStreamEvent {
+  commandId: string;
+  runId: string;
+  type: 'start' | 'stdout' | 'stderr' | 'system' | 'error' | 'exit';
+  data: string;
+  timestamp: number;
+  pid?: number;
+  exitCode?: number;
+}
+
 export interface UpdateInfo {
   current: string;
   latest: string;
@@ -268,6 +305,14 @@ export interface ApiSurface {
   executeScript(id: string): Promise<ScriptMutationResult>;
   stopScript(executionId: string): void;
   onScriptEvent(listener: (event: ScriptStreamEvent) => void): () => void;
+  listBatchCommands(): Promise<BatchCommand[]>;
+  saveBatchCommand(id: string | null, input: BatchCommandInput): Promise<ScriptMutationResult>;
+  addBatchCommands(inputs: BatchCommandInput[]): Promise<ScriptMutationResult>;
+  deleteBatchCommands(ids: string[]): Promise<ScriptMutationResult>;
+  /** Start commands in parallel; old processes are killed first when `restart` or `killBeforeStart`. */
+  startBatchCommands(ids: string[], restart?: boolean): Promise<BatchActionResult[]>;
+  stopBatchCommands(ids: string[]): Promise<BatchActionResult[]>;
+  onBatchEvent(listener: (event: BatchStreamEvent) => void): () => void;
   /**
    * Resolve a renderer-side {@link File} (typically from a drag-and-drop
    * payload) to its absolute filesystem path. Uses Electron's

@@ -2874,6 +2874,18 @@ const EMPTY_BATCH_FORM: BatchForm = { id: null, name: '', command: '', cwd: '', 
 const BATCH_LOG_LIMIT = 3000;
 const BATCH_OVERVIEW = '__overview__';
 
+const FullscreenEnterIcon: React.FC = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" d="M2.5 6V3.5H6M10 3.5h3.5V6M13.5 10v2.5H10M6 12.5H2.5V10" />
+  </svg>
+);
+
+const FullscreenExitIcon: React.FC = () => (
+  <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+    <path fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" d="M6 2.5V6H2.5M10 2.5V6h3.5M13.5 10H10v3.5M2.5 10H6v3.5" />
+  </svg>
+);
+
 function parseBatchLines(text: string): Array<{ name: string; command: string }> {
   return text
     .split(/\r?\n/)
@@ -3115,7 +3127,18 @@ const BatchView: React.FC = () => {
       </div>
       <section className={`script-output ${fullscreen ? 'batch-fullscreen' : ''}`}>
         <div className="batch-tabs">
-          <button className={`terminal-tab ${activeTab === BATCH_OVERVIEW ? 'active' : ''}`} onClick={() => setActiveTab(BATCH_OVERVIEW)}>{t('batch.overview')}</button>
+          <button
+            className={`batch-fullscreen-toggle ${fullscreen ? 'is-on' : ''}`}
+            title={fullscreen ? t('batch.exitFullscreen') : t('batch.fullscreen')}
+            aria-label={fullscreen ? t('batch.exitFullscreen') : t('batch.fullscreen')}
+            aria-pressed={fullscreen}
+            onClick={() => {
+              if (!fullscreen) setActiveTab(BATCH_OVERVIEW);
+              setFullscreen((value) => !value);
+            }}
+          >
+            {fullscreen ? <FullscreenExitIcon /> : <FullscreenEnterIcon />}
+          </button>
           {tabs.map((id) => {
             const item = byId.get(id);
             if (!item) return null;
@@ -3126,9 +3149,6 @@ const BatchView: React.FC = () => {
             </button>;
           })}
           <div className="spacer" />
-          <button className="ghost batch-fullscreen-toggle" title={fullscreen ? 'Esc' : ''} onClick={() => setFullscreen((value) => !value)}>
-            {fullscreen ? t('batch.exitFullscreen') : t('batch.fullscreen')}
-          </button>
         </div>
         {active ? <>
           <div className="script-output-header batch-run-info">

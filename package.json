@@ -1,6 +1,6 @@
 {
   "name": "closedport-tauri",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "ClosedPort rebuilt with Tauri, React and Rust",
   "scripts": {

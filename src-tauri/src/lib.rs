@@ -1299,14 +1299,22 @@ pub fn run() {
         }))
         .manage(AppState::default())
         .manage(batch::BatchState::default())
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 window.set_title(&format!("ClosedPort {}", updater::current_version()))?;
             }
-            let show = MenuItem::with_id(app, "show", "Show Main", true, None::<&str>)?;
+            let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
             let floating =
-                MenuItem::with_id(app, "floating", "Toggle Floating", true, None::<&str>)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+                MenuItem::with_id(app, "floating", "切换悬浮窗", true, None::<&str>)?;
+            let quit = MenuItem::with_id(app, "quit", "退出 ClosedPort", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show, &floating, &quit])?;
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())

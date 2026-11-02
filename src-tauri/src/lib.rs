@@ -15,7 +15,7 @@ use std::{
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tauri::{
     menu::{Menu, MenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
 };
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use uuid::Uuid;
@@ -1289,13 +1289,18 @@ fn toggle_floating(app: tauri::AppHandle) -> Result<bool, String> {
     Ok(true)
 }
 
+fn show_main_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
+            show_main_window(app);
         }))
         .manage(AppState::default())
         .manage(batch::BatchState::default())
@@ -1320,13 +1325,18 @@ pub fn run() {
                 .icon(app.default_window_icon().unwrap().clone())
                 .tooltip("ClosedPort")
                 .menu(&menu)
-                .on_menu_event(|app, e| match e.id.as_ref() {
-                    "show" => {
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
+                .show_menu_on_left_click(false)
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::DoubleClick {
+                        button: MouseButton::Left,
+                        ..
+                    } = event
+                    {
+                        show_main_window(tray.app_handle());
                     }
+                })
+                .on_menu_event(|app, e| match e.id.as_ref() {
+                    "show" => show_main_window(app),
                     "floating" => {
                         let _ = toggle_floating(app.clone());
                     }

@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a2f3d"/>
+      <stop offset="1" stop-color="#0c0e13"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ff2d3f" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#ff2d3f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="metal" gradientUnits="userSpaceOnUse" x1="0" y1="344" x2="0" y2="680">
+      <stop offset="0" stop-color="#ff8a8a"/>
+      <stop offset="0.35" stop-color="#f43f4e"/>
+      <stop offset="0.7" stop-color="#d4111f"/>
+      <stop offset="1" stop-color="#8f0a16"/>
+    </linearGradient>
+    <linearGradient id="shine" gradientUnits="userSpaceOnUse" x1="0" y1="344" x2="0" y2="560">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <mask id="wrench" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <rect width="1024" height="1024" fill="#000"/>
+      <circle cx="290" cy="512" r="168" fill="#fff"/>
+      <rect x="290" y="446" width="480" height="132" rx="40" fill="#fff"/>
+      <circle cx="772" cy="512" r="112" fill="#fff"/>
+      <rect x="60" y="450" width="236" height="124" fill="#000"/>
+      <circle cx="296" cy="512" r="62" fill="#000"/>
+      <circle cx="772" cy="512" r="50" fill="#000"/>
+    </mask>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="18" stdDeviation="22" flood-color="#000" flood-opacity="0.55"/>
+    </filter>
+    <clipPath id="tile">
+      <rect x="64" y="64" width="896" height="896" rx="210"/>
+    </clipPath>
+  </defs>
+
+  <rect x="64" y="64" width="896" height="896" rx="210" fill="url(#bg)"/>
+  <g clip-path="url(#tile)">
+    <circle cx="512" cy="512" r="430" fill="url(#glow)"/>
+  </g>
+  <rect x="66" y="66" width="892" height="892" rx="208" fill="none" stroke="#ffffff" stroke-opacity="0.08" stroke-width="4"/>
+
+  <g transform="rotate(-45 512 512) translate(-19 0)" filter="url(#shadow)">
+    <rect width="1024" height="1024" fill="url(#metal)" mask="url(#wrench)"/>
+    <rect x="0" y="340" width="1024" height="180" fill="url(#shine)" mask="url(#wrench)"/>
+  </g>
+</svg>

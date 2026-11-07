@@ -10,7 +10,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows": [{ "label": "main", "title": "ClosedPort", "width": 1180, "height": 760, "minWidth": 900, "minHeight": 600, "resizable": true }],
+    "windows": [{ "label": "main", "title": "ClosedPort", "width": 1180, "height": 760, "minWidth": 900, "minHeight": 600, "resizable": true, "dragDropEnabled": false }],
     "security": { "csp": null }
   },
   "bundle": {

@@ -309,6 +309,7 @@ export interface ApiSurface {
   saveBatchCommand(id: string | null, input: BatchCommandInput): Promise<ScriptMutationResult>;
   addBatchCommands(inputs: BatchCommandInput[]): Promise<ScriptMutationResult>;
   deleteBatchCommands(ids: string[]): Promise<ScriptMutationResult>;
+  reorderBatchCommands(ids: string[]): Promise<ScriptMutationResult>;
   /** Start commands in parallel; old processes are killed first when `restart` or `killBeforeStart`. */
   startBatchCommands(ids: string[], restart?: boolean): Promise<BatchActionResult[]>;
   stopBatchCommands(ids: string[]): Promise<BatchActionResult[]>;

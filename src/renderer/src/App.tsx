@@ -2873,6 +2873,35 @@ type BatchForm = BatchCommandInput & { id: string | null };
 const EMPTY_BATCH_FORM: BatchForm = { id: null, name: '', command: '', cwd: '', killBeforeStart: true };
 const BATCH_LOG_LIMIT = 3000;
 const BATCH_OVERVIEW = '__overview__';
+type BatchDropEdge = 'before' | 'after';
+
+function moveBatchCommand(
+  items: BatchCommand[],
+  sourceId: string,
+  targetId: string,
+  edge: BatchDropEdge
+): BatchCommand[] {
+  if (sourceId === targetId) return items;
+  const sourceIndex = items.findIndex((item) => item.id === sourceId);
+  if (sourceIndex < 0 || !items.some((item) => item.id === targetId)) return items;
+
+  const next = [...items];
+  const [source] = next.splice(sourceIndex, 1);
+  const targetIndex = next.findIndex((item) => item.id === targetId);
+  next.splice(targetIndex + (edge === 'after' ? 1 : 0), 0, source);
+  return next.every((item, index) => item.id === items[index].id) ? items : next;
+}
+
+const DragHandleIcon: React.FC = () => (
+  <svg viewBox="0 0 12 16" width="12" height="16" aria-hidden="true">
+    <circle cx="3" cy="3" r="1.1" fill="currentColor" />
+    <circle cx="9" cy="3" r="1.1" fill="currentColor" />
+    <circle cx="3" cy="8" r="1.1" fill="currentColor" />
+    <circle cx="9" cy="8" r="1.1" fill="currentColor" />
+    <circle cx="3" cy="13" r="1.1" fill="currentColor" />
+    <circle cx="9" cy="13" r="1.1" fill="currentColor" />
+  </svg>
+);
 
 const FullscreenEnterIcon: React.FC = () => (
   <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -2913,7 +2942,11 @@ const BatchView: React.FC = () => {
   const [error, setError] = useState('');
   const [nowTs, setNowTs] = useState(Date.now());
   const [fullscreen, setFullscreen] = useState(false);
+  const [draggedId, setDraggedId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{ id: string; edge: BatchDropEdge } | null>(null);
+  const [reordering, setReordering] = useState(false);
   const pending = useRef<BatchStreamEvent[]>([]);
+  const reorderPending = useRef(false);
   const logRef = useRef<HTMLDivElement>(null);
   const stickBottom = useRef(true);
 
@@ -2995,6 +3028,43 @@ const BatchView: React.FC = () => {
     return next;
   });
   const toggleAll = () => setSelected(allChecked ? new Set() : new Set(filtered.map((item) => item.id)));
+
+  const reorder = async (sourceId: string, targetId: string, edge: BatchDropEdge) => {
+    if (reorderPending.current) return;
+    const next = moveBatchCommand(items, sourceId, targetId, edge);
+    if (next === items) return;
+
+    reorderPending.current = true;
+    setReordering(true);
+    setError('');
+    setItems(next);
+    try {
+      const result = await window.closedport.reorderBatchCommands(next.map((item) => item.id));
+      if (!result.success) {
+        setError(result.message || t('batch.reorderFailed'));
+      }
+      await refresh();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(`${t('batch.reorderFailed')}: ${message}`);
+      await refresh();
+    } finally {
+      reorderPending.current = false;
+      setReordering(false);
+    }
+  };
+
+  const clearDrag = () => {
+    setDraggedId(null);
+    setDropTarget(null);
+  };
+
+  const moveWithKeyboard = (id: string, direction: -1 | 1) => {
+    const index = filtered.findIndex((item) => item.id === id);
+    const target = filtered[index + direction];
+    if (!target) return;
+    void reorder(id, target.id, direction < 0 ? 'before' : 'after');
+  };
 
   const act = async (ids: string[], kind: 'start' | 'restart' | 'stop') => {
     if (!ids.length) return;
@@ -3105,13 +3175,68 @@ const BatchView: React.FC = () => {
     <div className="scripts-layout">
       <div className="scripts-list content">
         {!filtered.length ? <div className="empty">{t('batch.empty')}</div> : <table className="table"><thead><tr>
+          <th className="batch-order-cell" title={t('batch.dragHint')} aria-label={t('batch.dragHint')} />
           <th style={{ width: 32 }}><input type="checkbox" checked={allChecked} onChange={toggleAll} /></th>
           <th>{t('scripts.col.name')}</th><th>{t('scripts.col.command')}</th>
           <th style={{ width: 96 }}>{t('batch.col.status')}</th><th style={{ width: 70 }}>PID</th>
           <th style={{ width: 250 }}>{t('scripts.col.action')}</th>
         </tr></thead><tbody>{filtered.map((item) => {
           const status = statusOf(item);
-          return <tr key={item.id} className={activeTab === item.id ? 'selected' : ''} onDoubleClick={() => openTab(item.id)}>
+          const rowClass = [
+            activeTab === item.id ? 'selected' : '',
+            draggedId === item.id ? 'batch-row-dragging' : '',
+            dropTarget?.id === item.id ? `batch-drop-${dropTarget.edge}` : ''
+          ].filter(Boolean).join(' ');
+          return <tr
+            key={item.id}
+            className={rowClass}
+            onDoubleClick={() => openTab(item.id)}
+            onDragOver={(event) => {
+              if (!draggedId || draggedId === item.id || reordering) return;
+              event.preventDefault();
+              event.dataTransfer.dropEffect = 'move';
+              const rect = event.currentTarget.getBoundingClientRect();
+              const edge: BatchDropEdge = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+              setDropTarget((current) => current?.id === item.id && current.edge === edge ? current : { id: item.id, edge });
+            }}
+            onDrop={(event) => {
+              event.preventDefault();
+              const sourceId = event.dataTransfer.getData('text/plain') || draggedId;
+              const rect = event.currentTarget.getBoundingClientRect();
+              const edge: BatchDropEdge = event.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+              clearDrag();
+              if (sourceId && sourceId !== item.id) void reorder(sourceId, item.id, edge);
+            }}
+          >
+            <td className="batch-order-cell">
+              <span
+                className={`batch-drag-handle ${busy || reordering ? 'disabled' : ''}`}
+                role="button"
+                tabIndex={busy || reordering ? -1 : 0}
+                draggable={!busy && !reordering}
+                aria-label={t('batch.dragHint')}
+                aria-disabled={busy || reordering}
+                title={t('batch.dragHint')}
+                onClick={(event) => event.stopPropagation()}
+                onDoubleClick={(event) => event.stopPropagation()}
+                onKeyDown={(event) => {
+                  if (busy || reordering || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  moveWithKeyboard(item.id, event.key === 'ArrowUp' ? -1 : 1);
+                }}
+                onDragStart={(event) => {
+                  if (busy || reordering) { event.preventDefault(); return; }
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('text/plain', item.id);
+                  setDraggedId(item.id);
+                  setDropTarget(null);
+                }}
+                onDragEnd={clearDrag}
+              >
+                <DragHandleIcon />
+              </span>
+            </td>
             <td><input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} /></td>
             <td>{item.name}</td>
             <td className="mono" title={item.cwd ? `${item.command}\n${t('batch.cwd')}: ${item.cwd}` : item.command}>{item.command}</td>

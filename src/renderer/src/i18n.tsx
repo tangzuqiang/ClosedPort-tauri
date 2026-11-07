@@ -293,6 +293,8 @@ export const dicts: Record<Lang, Dict> = {
     ,'batch.deleteConfirm': 'Delete “{name}”?'
     ,'batch.fullscreen': 'Fullscreen'
     ,'batch.exitFullscreen': 'Exit fullscreen (Esc)'
+    ,'batch.dragHint': 'Drag to reorder; use the Up/Down arrow keys to move'
+    ,'batch.reorderFailed': 'Failed to save command order'
   },
   zh: {
     'terminal.title': '终端',
@@ -355,6 +357,8 @@ export const dicts: Record<Lang, Dict> = {
     'batch.deleteConfirm': '确认删除“{name}”？',
     'batch.fullscreen': '全屏',
     'batch.exitFullscreen': '退出全屏（Esc）',
+    'batch.dragHint': '拖动调整顺序；也可按上下方向键移动',
+    'batch.reorderFailed': '保存命令顺序失败',
     'hosts.filter': '按 IP、域名或备注筛选...',
     'hosts.add': '新增映射',
     'hosts.bulkAdd': '批量添加',

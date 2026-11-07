@@ -1,7 +1,7 @@
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     io::{BufRead, BufReader, Read},
     path::PathBuf,
@@ -109,6 +109,10 @@ fn read_all(app: &tauri::AppHandle) -> Vec<BatchCommand> {
         .and_then(|x| serde_json::from_str(&x).ok())
         .unwrap_or_default()
 }
+fn read_all_locked(app: &tauri::AppHandle, state: &BatchState) -> Vec<BatchCommand> {
+    let _guard = state.store.lock();
+    read_all(app)
+}
 fn write_all(app: &tauri::AppHandle, items: &[BatchCommand]) -> Result<(), String> {
     let p = store_path(app);
     if let Some(d) = p.parent() {
@@ -127,6 +131,35 @@ fn modify<T>(
     let out = f(&mut items);
     write_all(app, &items)?;
     Ok(out)
+}
+
+fn reorder_items(items: &mut Vec<BatchCommand>, ids: &[String]) -> Result<(), String> {
+    if ids.len() != items.len() {
+        return Err("排序列表必须包含全部命令 ID".into());
+    }
+
+    let mut seen = HashSet::with_capacity(ids.len());
+    for id in ids {
+        if !seen.insert(id.as_str()) {
+            return Err(format!("排序列表包含重复 ID：{id}"));
+        }
+    }
+
+    let current: HashSet<&str> = items.iter().map(|item| item.id.as_str()).collect();
+    if let Some(id) = ids.iter().find(|id| !current.contains(id.as_str())) {
+        return Err(format!("排序列表包含未知 ID：{id}"));
+    }
+    if let Some(item) = items.iter().find(|item| !seen.contains(item.id.as_str())) {
+        return Err(format!("排序列表缺少 ID：{}", item.id));
+    }
+
+    let order: HashMap<&str, usize> = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| (id.as_str(), index))
+        .collect();
+    items.sort_by_key(|item| order.get(item.id.as_str()).copied().unwrap_or(usize::MAX));
+    Ok(())
 }
 
 fn emit(app: &tauri::AppHandle, command_id: &str, run_id: &str, kind: &'static str, data: String) {
@@ -280,7 +313,10 @@ fn start_one(app: &tauri::AppHandle, state: &BatchState, id: &str, restart: bool
         pid: None,
         run_id: None,
     };
-    let Some(item) = read_all(app).into_iter().find(|x| x.id == id) else {
+    let Some(item) = read_all_locked(app, state)
+        .into_iter()
+        .find(|x| x.id == id)
+    else {
         return fail("命令不存在".into());
     };
     let already_running = state
@@ -399,7 +435,7 @@ fn start_one(app: &tauri::AppHandle, state: &BatchState, id: &str, restart: bool
 }
 
 fn stop_one(app: &tauri::AppHandle, state: &BatchState, id: &str) -> BatchActionResult {
-    let item = read_all(app).into_iter().find(|x| x.id == id);
+    let item = read_all_locked(app, state).into_iter().find(|x| x.id == id);
     let killed = item.as_ref().and_then(|x| kill_existing(state, x));
     if let Some(pid) = killed {
         let run_id = state
@@ -433,8 +469,9 @@ fn run_parallel(ids: Vec<String>, f: impl Fn(&str) -> BatchActionResult + Send +
 
 #[tauri::command]
 pub fn list_batch_commands(app: tauri::AppHandle, state: State<BatchState>) -> Vec<BatchCommandView> {
+    let commands = read_all_locked(&app, &state);
     let running = state.running.lock();
-    read_all(&app)
+    commands
         .into_iter()
         .map(|command| {
             let r = running.get(&command.id);
@@ -447,6 +484,19 @@ pub fn list_batch_commands(app: tauri::AppHandle, state: State<BatchState>) -> V
             }
         })
         .collect()
+}
+
+#[tauri::command]
+pub fn reorder_batch_commands(
+    app: tauri::AppHandle,
+    state: State<BatchState>,
+    ids: Vec<String>,
+) -> Mutation {
+    crate::mutation(
+        modify(&app, &state, |items| reorder_items(items, &ids))
+            .and_then(|result| result)
+            .map(|_| String::new()),
+    )
 }
 
 #[tauri::command]
@@ -564,4 +614,67 @@ pub async fn stop_batch_commands(
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn command(id: &str) -> BatchCommand {
+        BatchCommand {
+            id: id.into(),
+            name: id.into(),
+            command: format!("run-{id}"),
+            cwd: String::new(),
+            kill_before_start: true,
+            created_at: 0,
+            updated_at: 0,
+            last_pid: None,
+            last_pid_start: None,
+            last_started_at: None,
+            last_exited_at: None,
+            last_exit_code: None,
+        }
+    }
+
+    fn item_ids(items: &[BatchCommand]) -> Vec<&str> {
+        items.iter().map(|item| item.id.as_str()).collect()
+    }
+
+    fn assert_invalid_order_keeps_items(ids: &[&str]) {
+        let mut items = vec![command("a"), command("b"), command("c")];
+        let original = item_ids(&items)
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let ids = ids.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+
+        assert!(reorder_items(&mut items, &ids).is_err());
+        assert_eq!(item_ids(&items), original);
+    }
+
+    #[test]
+    fn reorders_items_by_complete_id_permutation() {
+        let mut items = vec![command("a"), command("b"), command("c")];
+        let ids = vec!["c".into(), "a".into(), "b".into()];
+
+        reorder_items(&mut items, &ids).unwrap();
+
+        assert_eq!(item_ids(&items), ["c", "a", "b"]);
+    }
+
+    #[test]
+    fn rejects_missing_id_without_changing_items() {
+        assert_invalid_order_keeps_items(&["c", "a"]);
+    }
+
+    #[test]
+    fn rejects_unknown_id_without_changing_items() {
+        assert_invalid_order_keeps_items(&["c", "unknown", "a"]);
+    }
+
+    #[test]
+    fn rejects_duplicate_id_without_changing_items() {
+        assert_invalid_order_keeps_items(&["c", "a", "a"]);
+    }
 }

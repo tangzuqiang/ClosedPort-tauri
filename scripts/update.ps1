@@ -106,22 +106,40 @@ function Import-UpdateEnv {
     }
 }
 
+function Invoke-Ssh([string]$Target, [string]$Command) {
+    $output = & ssh -o BatchMode=yes -o ConnectTimeout=20 $Target $Command 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw "SSH 命令失败（退出码 $LASTEXITCODE）：$Command`n$($output -join "`n")"
+    }
+    return ($output -join "`n").Trim()
+}
+
+function Send-Scp([string]$Local, [string]$Target, [string]$RemotePath) {
+    & scp -o BatchMode=yes -o ConnectTimeout=20 $Local "${Target}:$RemotePath"
+    if ($LASTEXITCODE -ne 0) {
+        throw "scp 上传失败（退出码 $LASTEXITCODE）：$Local"
+    }
+}
+
 function Publish-Installer([string]$Installer, [string]$Version, [string]$Notes) {
     Import-UpdateEnv
 
     $hostName = if ($env:UPDATE_HOST) { $env:UPDATE_HOST } else { "111.230.247.111" }
     $user = if ($env:UPDATE_USER) { $env:UPDATE_USER } else { "root" }
-    $pass = $env:UPDATE_PASS
     $remoteDir = if ($env:UPDATE_DIR) { $env:UPDATE_DIR } else { "/usr/share/nginx/html/closedport" }
+    $target = "$user@$hostName"
 
-    if (-not $pass) {
-        throw "请先在 scripts/.update-server.env 中填写 UPDATE_PASS（该文件已加入 gitignore）"
+    if (-not (Get-Command ssh -ErrorAction SilentlyContinue) -or -not (Get-Command scp -ErrorAction SilentlyContinue)) {
+        throw "找不到 ssh/scp，请先安装 Windows OpenSSH 客户端"
     }
     if (-not (Test-Path $Installer)) {
         throw "找不到安装包：$Installer"
     }
 
     $exe = Get-Item $Installer
+    if ($exe.Length -lt 64) {
+        throw "本地安装包过小：$($exe.Length) 字节"
+    }
     $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLower()
     $isSetup = $exe.Name -match "setup|\.msi$"
     $fileName = if ($isSetup) { $exe.Name } else { "ClosedPort_${Version}_x64-setup.exe" }
@@ -132,27 +150,29 @@ function Publish-Installer([string]$Installer, [string]$Version, [string]$Notes)
         notes      = $Notes
         url        = $feedUrl
         sha256     = $hash
-        silentArgs = "/S /R"
+        silentArgs = "/S"
     }
-    $json = ($manifestObj | ConvertTo-Json -Compress)
-    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
-    [System.IO.File]::WriteAllText($manifestPath, $json, $utf8NoBom)
+    Write-Utf8File $manifestPath ($manifestObj | ConvertTo-Json -Compress)
 
-    Write-Host "上传 $fileName 和 latest.json 到 ${user}@${hostName}:$remoteDir"
+    Write-Host "通过 SSH 上传 $fileName 和 latest.json 到 ${target}:$remoteDir"
+    $whoami = Invoke-Ssh $target "mkdir -p '$remoteDir' && whoami"
+    Write-Host "  SSH 已连接（远程用户 $whoami）"
 
-    $env:UPDATE_HOST = $hostName
-    $env:UPDATE_USER = $user
-    $env:UPDATE_PASS = $pass
-    $env:UPDATE_DIR = $remoteDir
-    $env:UPDATE_VERSION = $Version
-    $env:UPDATE_NOTES = $Notes
-    $env:UPDATE_URL = $feedUrl
-    $env:UPDATE_SHA256 = $hash
-    $uploader = Join-Path $PSScriptRoot "upload-update.py"
-    python $uploader $exe.FullName $manifestPath $fileName
-    if ($LASTEXITCODE -ne 0) {
-        throw "上传失败，退出码 $LASTEXITCODE"
+    # 先传到临时文件名，校验通过后再改名，避免客户端下载到半截文件
+    $remoteExe = "$remoteDir/$fileName"
+    $remoteJson = "$remoteDir/latest.json"
+    Write-Host "  上传安装包（$($exe.Length) 字节）…"
+    Send-Scp $exe.FullName $target "$remoteExe.uploading"
+    Send-Scp $manifestPath $target "$remoteJson.uploading"
+
+    $remoteHash = (Invoke-Ssh $target "sha256sum '$remoteExe.uploading' | cut -d' ' -f1").ToLower()
+    if ($remoteHash -ne $hash) {
+        Invoke-Ssh $target "rm -f '$remoteExe.uploading' '$remoteJson.uploading'" | Out-Null
+        throw "远程安装包校验失败：本地 $hash，远程 $remoteHash"
     }
+    Invoke-Ssh $target "chmod 644 '$remoteExe.uploading' '$remoteJson.uploading' && mv -f '$remoteExe.uploading' '$remoteExe' && mv -f '$remoteJson.uploading' '$remoteJson'" | Out-Null
+    Write-Host "  已发布，SHA256 校验一致"
+    Write-Host "  远程目录：$((Invoke-Ssh $target "ls -1 '$remoteDir'") -replace "`n", ', ')"
 
     $checkUrl = "http://$hostName/closedport/$fileName"
     try {
@@ -166,7 +186,6 @@ function Publish-Installer([string]$Installer, [string]$Version, [string]$Notes)
     }
     Write-Host "清单地址：http://$hostName/closedport/latest.json"
 }
-
 function Wait-ScriptWindow {
     if ($NoPause) { return }
     if (-not [Environment]::UserInteractive) { return }

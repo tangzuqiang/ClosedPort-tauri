@@ -13,14 +13,14 @@ npm run tauri:dev
 npm run tauri:build
 ```
 
-发布更新：在 `update.txt` 末尾追加 `版本号 更新说明`，复制
-`scripts/.update-server.env.example` 为 `scripts/.update-server.env` 并填写发布凭据，然后运行：
+发布更新：在 `update.txt` 末尾追加 `版本号 更新说明`，确认本机 SSH 密钥能免密登录更新服务器
+（`ssh -o BatchMode=yes root@111.230.247.111 echo ok`），然后运行：
 
 ```powershell
 npm run update
 ```
 
-该命令会同步三处版本号、构建 NSIS 安装包、计算 SHA256、生成更新清单并上传。
+该命令会同步三处版本号、构建 NSIS 安装包、计算 SHA256、生成更新清单并通过 ssh/scp 上传。
 完整步骤见 `docs/更新流程.md`。
 
 Windows 上部分系统操作（终止系统进程、编辑系统启动项/hosts）需要以管理员身份运行。

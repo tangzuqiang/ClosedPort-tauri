@@ -263,8 +263,11 @@ export const dicts: Record<Lang, Dict> = {
     ,'batch.filter': 'Filter by name or command...'
     ,'batch.add': 'Add command'
     ,'batch.bulkAdd': 'Bulk add'
+    ,'batch.bulkEdit': 'Bulk edit'
     ,'batch.bulkTitle': 'Bulk add commands'
+    ,'batch.bulkEditTitle': 'Bulk edit commands'
     ,'batch.bulkHint': 'One command per line, "name :: command"; lines starting with # are ignored.'
+    ,'batch.bulkEditHint': 'Same layout as bulk add. Lines update the selection in order; extra lines are added, and missing lines do not delete commands. Working directory and “kill before start” apply to every line.'
     ,'batch.bulkLines': 'commands'
     ,'batch.cwd': 'Working dir'
     ,'batch.cwdPlaceholder': 'Working directory (optional)'
@@ -294,6 +297,7 @@ export const dicts: Record<Lang, Dict> = {
     ,'batch.fullscreen': 'Fullscreen'
     ,'batch.exitFullscreen': 'Exit fullscreen (Esc)'
     ,'batch.dragHint': 'Drag to reorder; use the Up/Down arrow keys to move'
+    ,'batch.resizePanes': 'Drag to resize the list and output'
     ,'batch.reorderFailed': 'Failed to save command order'
   },
   zh: {
@@ -327,8 +331,11 @@ export const dicts: Record<Lang, Dict> = {
     'batch.filter': '按名称或命令筛选...',
     'batch.add': '新增命令',
     'batch.bulkAdd': '批量添加',
+    'batch.bulkEdit': '批量编辑',
     'batch.bulkTitle': '批量添加命令',
+    'batch.bulkEditTitle': '批量编辑命令',
     'batch.bulkHint': '每行一条，格式“名称 :: 命令”，不写名称则用命令作名称；# 开头的行忽略。',
+    'batch.bulkEditHint': '页面与批量添加相同。按已选顺序逐行更新，多出的行会新增，少了的行不会删除对应命令。工作目录和“启动前结束”会应用到每一行。',
     'batch.bulkLines': '条有效命令',
     'batch.cwd': '工作目录',
     'batch.cwdPlaceholder': '工作目录（可选）',
@@ -358,6 +365,7 @@ export const dicts: Record<Lang, Dict> = {
     'batch.fullscreen': '全屏',
     'batch.exitFullscreen': '退出全屏（Esc）',
     'batch.dragHint': '拖动调整顺序；也可按上下方向键移动',
+    'batch.resizePanes': '拖动调整列表与输出区的宽度',
     'batch.reorderFailed': '保存命令顺序失败',
     'hosts.filter': '按 IP、域名或备注筛选...',
     'hosts.add': '新增映射',

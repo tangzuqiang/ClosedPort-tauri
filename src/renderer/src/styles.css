@@ -215,6 +215,47 @@ button.terminal-tab.active {
 .script-editor-actions { grid-column: 1 / -1; display: flex; gap: 8px; }
 .script-editor-actions .spacer { flex: 1; }
 .scripts-layout { display: grid; grid-template-columns: minmax(420px, 1.05fr) minmax(360px, .95fr); flex: 1; min-height: 0; }
+.scripts-layout.batch-split {
+  display: flex;
+  min-width: 0;
+}
+.batch-split > .scripts-list {
+  flex: 0 0 var(--batch-list-width, 52%);
+  width: var(--batch-list-width, 52%);
+  min-width: 320px;
+  max-width: calc(100% - 286px);
+  border-right: 0;
+}
+.batch-split > .script-output { flex: 1 1 auto; min-width: 240px; }
+.batch-splitter {
+  flex: 0 0 6px;
+  width: 6px;
+  margin: 0 -1px;
+  position: relative;
+  z-index: 6;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+}
+.batch-splitter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 1px;
+  background: var(--border);
+}
+.batch-splitter:hover::before,
+.batch-splitter:focus-visible::before,
+.batch-split.is-resizing .batch-splitter::before {
+  left: 1px;
+  width: 3px;
+  background: var(--accent);
+}
+.batch-splitter:focus-visible { outline: none; }
+body.is-col-resizing,
+body.is-col-resizing * { cursor: col-resize !important; user-select: none !important; }
 .scripts-list { border-right: 1px solid var(--border); }
 .script-output { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0b0d11; }
 .script-output-header { display: flex; align-items: center; gap: 8px; min-height: 42px; padding: 6px 10px; border-bottom: 1px solid var(--border); background: var(--bg-soft); }
@@ -275,6 +316,15 @@ button.terminal-tab.active {
 @media (max-width: 980px) {
   .batch-editor { grid-template-columns: 1fr; }
   .scripts-layout { grid-template-columns: 1fr; grid-template-rows: minmax(220px, 1fr) minmax(200px, .8fr); }
+  .scripts-layout.batch-split { flex-direction: column; }
+  .batch-split > .scripts-list {
+    flex: 1 1 auto;
+    width: auto;
+    max-width: none;
+    min-height: 220px;
+  }
+  .batch-split > .script-output { min-height: 200px; }
+  .batch-splitter { display: none; }
   .scripts-list { border-right: 0; border-bottom: 1px solid var(--border); }
   .script-editor { grid-template-columns: 1fr; }
   .script-editor-actions { grid-column: 1; }
@@ -469,6 +519,68 @@ button.terminal-tab.active {
   display: flex;
   gap: 4px;
 }
+
+/* Batch list: PID, name, status and row actions stay on the right edge.
+   The command column absorbs leftover width; if the list is narrower
+   than the pinned columns, those columns stick while the rest scrolls. */
+.batch-table {
+  --batch-name-w: 148px;
+  --batch-status-w: 79px;
+  --batch-pid-w: 76px;
+  --batch-actions-w: 248px;
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+.batch-table th,
+.batch-table td {
+  max-width: none;
+}
+.batch-table col.batch-col-handle { width: 30px; }
+.batch-table col.batch-col-check { width: 36px; }
+.batch-table col.batch-col-name { width: var(--batch-name-w); }
+.batch-table col.batch-col-status { width: var(--batch-status-w); }
+.batch-table col.batch-col-pid { width: var(--batch-pid-w); }
+.batch-table col.batch-col-actions { width: var(--batch-actions-w); }
+.batch-table .batch-col-name,
+.batch-table .batch-col-status,
+.batch-table .batch-col-pid,
+.batch-table .batch-col-actions {
+  width: auto;
+}
+.batch-table .batch-col-actions {
+  overflow: visible;
+  text-overflow: clip;
+}
+.batch-table .batch-col-actions .row-actions {
+  justify-content: flex-end;
+}
+.batch-table th.batch-col-actions { text-align: right; }
+.batch-table thead th {
+  z-index: 3;
+}
+.batch-table .batch-pin {
+  position: sticky;
+  z-index: 2;
+  background: var(--bg);
+}
+.batch-table thead .batch-pin {
+  top: 0;
+  z-index: 4;
+  background: var(--bg-soft);
+}
+.batch-table .batch-col-actions { right: 0; }
+.batch-table .batch-col-status { right: var(--batch-actions-w); }
+.batch-table .batch-col-name { right: calc(var(--batch-actions-w) + var(--batch-status-w)); }
+.batch-table .batch-col-pid {
+  right: calc(var(--batch-actions-w) + var(--batch-status-w) + var(--batch-name-w));
+  border-left: 1px solid var(--border);
+}
+.batch-table tbody tr:hover td.batch-pin { background: var(--bg-soft); }
+.batch-table tbody tr.selected td.batch-pin,
+.batch-table tbody tr.selected:hover td.batch-pin { background: var(--accent-soft); }
+.batch-table tbody tr.batch-row-dragging td.batch-pin { background: var(--bg); }
 
 .view-switch {
   display: flex;

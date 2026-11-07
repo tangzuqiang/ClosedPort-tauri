@@ -567,6 +567,71 @@ pub fn add_batch_commands(
     )
 }
 
+fn apply_bulk_edit(
+    items: &mut Vec<BatchCommand>,
+    ids: &[String],
+    inputs: Vec<BatchInput>,
+    now: u64,
+) -> Result<(), String> {
+    if ids.is_empty() {
+        return Err("没有选中的命令".into());
+    }
+    if inputs.is_empty() || inputs.iter().all(|input| input.command.trim().is_empty()) {
+        return Err("命令不能为空".into());
+    }
+    let mut seen = HashSet::new();
+    for id in ids {
+        if !seen.insert(id.as_str()) {
+            return Err(format!("重复的命令 ID：{id}"));
+        }
+    }
+    let index: HashMap<&str, usize> = items
+        .iter()
+        .enumerate()
+        .map(|(i, item)| (item.id.as_str(), i))
+        .collect();
+    if let Some(id) = ids.iter().find(|id| !index.contains_key(id.as_str())) {
+        return Err(format!("找不到命令：{id}"));
+    }
+    let update_count = ids.len().min(inputs.len());
+    if inputs.iter().take(update_count).any(|input| input.command.trim().is_empty()) {
+        return Err("命令不能为空".into());
+    }
+
+    let positions: Vec<usize> = ids.iter().map(|id| index[id.as_str()]).collect();
+    drop(index);
+    for (pos, input) in positions.into_iter().take(update_count).zip(inputs.iter()) {
+        let item = &mut items[pos];
+        item.name = input.name.clone();
+        item.command = input.command.clone();
+        item.cwd = input.cwd.clone();
+        item.kill_before_start = input.kill_before_start;
+        item.updated_at = now;
+    }
+    for input in inputs.into_iter().skip(ids.len()) {
+        if !input.command.trim().is_empty() {
+            items.push(new_command(input, now));
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn update_batch_commands(
+    app: tauri::AppHandle,
+    state: State<BatchState>,
+    ids: Vec<String>,
+    inputs: Vec<BatchInput>,
+) -> Mutation {
+    crate::mutation(
+        modify(&app, &state, |items| {
+            apply_bulk_edit(items, &ids, inputs, now())
+        })
+        .and_then(|result| result)
+        .map(|_| String::new()),
+    )
+}
+
 #[tauri::command]
 pub fn delete_batch_commands(
     app: tauri::AppHandle,
@@ -676,5 +741,64 @@ mod tests {
     #[test]
     fn rejects_duplicate_id_without_changing_items() {
         assert_invalid_order_keeps_items(&["c", "a", "a"]);
+    }
+
+    fn input(name: &str, command: &str) -> BatchInput {
+        BatchInput {
+            name: name.into(),
+            command: command.into(),
+            cwd: String::new(),
+            kill_before_start: true,
+        }
+    }
+
+    #[test]
+    fn bulk_edit_updates_selected_rows_and_appends_extra_lines() {
+        let mut items = vec![command("a"), command("b"), command("c")];
+        let mut extra = input("D", "echo d");
+        extra.cwd = "D:\\work".into();
+        extra.kill_before_start = false;
+
+        apply_bulk_edit(
+            &mut items,
+            &["a".into(), "c".into()],
+            vec![input("A", "echo a"), input("C", "echo c"), extra],
+            9,
+        )
+        .unwrap();
+
+        assert_eq!(items[0].name, "A");
+        assert_eq!(items[0].command, "echo a");
+        assert_eq!(items[0].updated_at, 9);
+        assert_eq!(items[1].name, "b");
+        assert_eq!(items[1].updated_at, 0);
+        assert_eq!(items[2].name, "C");
+        assert_eq!(items[2].command, "echo c");
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[3].name, "D");
+        assert_eq!(items[3].cwd, "D:\\work");
+        assert!(!items[3].kill_before_start);
+    }
+
+    #[test]
+    fn bulk_edit_with_fewer_lines_leaves_remaining_commands() {
+        let mut items = vec![command("a"), command("b")];
+
+        apply_bulk_edit(&mut items, &["a".into(), "b".into()], vec![input("A", "echo a")], 3).unwrap();
+
+        assert_eq!(items[0].name, "A");
+        assert_eq!(items[1].name, "b");
+        assert_eq!(items[1].updated_at, 0);
+    }
+
+    #[test]
+    fn bulk_edit_rejects_unknown_id_without_changes() {
+        let mut items = vec![command("a")];
+
+        let err = apply_bulk_edit(&mut items, &["missing".into()], vec![input("A", "echo")], 1).unwrap_err();
+
+        assert!(err.contains("missing"));
+        assert_eq!(items[0].name, "a");
+        assert_eq!(items[0].updated_at, 0);
     }
 }

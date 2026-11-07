@@ -57,6 +57,7 @@ export const tauriApi: ApiSurface = {
   listBatchCommands: () => invoke('list_batch_commands'),
   saveBatchCommand: (id, input) => invoke('save_batch_command', { id, input }),
   addBatchCommands: (inputs) => invoke('add_batch_commands', { inputs }),
+  updateBatchCommands: (ids, inputs) => invoke('update_batch_commands', { ids, inputs }),
   deleteBatchCommands: (ids) => invoke('delete_batch_commands', { ids }),
   reorderBatchCommands: (ids) => invoke('reorder_batch_commands', { ids }),
   startBatchCommands: (ids, restart = false) => invoke('start_batch_commands', { ids, restart }),

@@ -1385,6 +1385,7 @@ pub fn run() {
             batch::reorder_batch_commands,
             batch::save_batch_command,
             batch::add_batch_commands,
+            batch::update_batch_commands,
             batch::delete_batch_commands,
             batch::start_batch_commands,
             batch::stop_batch_commands,

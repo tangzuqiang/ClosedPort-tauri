@@ -2934,7 +2934,7 @@ const BatchView: React.FC = () => {
   const [filter, setFilter] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [form, setForm] = useState<BatchForm | null>(null);
-  const [bulk, setBulk] = useState<{ text: string; cwd: string; killBeforeStart: boolean } | null>(null);
+  const [bulk, setBulk] = useState<{ text: string; cwd: string; killBeforeStart: boolean; ids: string[] } | null>(null);
   const [logs, setLogs] = useState<Record<string, BatchStreamEvent[]>>({});
   const [tabs, setTabs] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState(BATCH_OVERVIEW);
@@ -2945,10 +2945,63 @@ const BatchView: React.FC = () => {
   const [draggedId, setDraggedId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{ id: string; edge: BatchDropEdge } | null>(null);
   const [reordering, setReordering] = useState(false);
+  const [listWidth, setListWidth] = useState<number | null>(() => {
+    try {
+      const value = Number(localStorage.getItem('closedport.batch.listWidth'));
+      return Number.isFinite(value) && value >= 320 ? value : null;
+    } catch {
+      return null;
+    }
+  });
+  const [resizing, setResizing] = useState(false);
   const pending = useRef<BatchStreamEvent[]>([]);
   const reorderPending = useRef(false);
   const logRef = useRef<HTMLDivElement>(null);
   const stickBottom = useRef(true);
+  const layoutRef = useRef<HTMLDivElement>(null);
+
+  const rememberListWidth = (width: number) => {
+    setListWidth(width);
+    try { localStorage.setItem('closedport.batch.listWidth', String(width)); } catch { /* ignore quota */ }
+  };
+  const resetListWidth = () => {
+    setListWidth(null);
+    try { localStorage.removeItem('closedport.batch.listWidth'); } catch { /* ignore quota */ }
+  };
+  const clampListWidth = (clientX: number) => {
+    const layout = layoutRef.current;
+    if (!layout) return null;
+    const rect = layout.getBoundingClientRect();
+    const minLeft = 320;
+    const minRight = 280;
+    return Math.round(Math.min(rect.right - minRight, Math.max(rect.left + minLeft, clientX)) - rect.left);
+  };
+  const startResize = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || !layoutRef.current) return;
+    event.preventDefault();
+    const handle = event.currentTarget;
+    try { handle.setPointerCapture(event.pointerId); } catch { /* pointer may already be released */ }
+    setResizing(true);
+    document.body.classList.add('is-col-resizing');
+    let latest = clampListWidth(event.clientX);
+    if (latest != null) setListWidth(latest);
+    const move = (ev: PointerEvent) => {
+      latest = clampListWidth(ev.clientX);
+      if (latest != null) setListWidth(latest);
+    };
+    const end = (ev: PointerEvent) => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', end);
+      handle.removeEventListener('pointercancel', end);
+      try { if (handle.hasPointerCapture(ev.pointerId)) handle.releasePointerCapture(ev.pointerId); } catch { /* ignore */ }
+      document.body.classList.remove('is-col-resizing');
+      setResizing(false);
+      if (latest != null) rememberListWidth(latest);
+    };
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
+  };
 
   const refresh = useCallback(async () => {
     try { setItems(await window.closedport.listBatchCommands()); }
@@ -3092,9 +3145,32 @@ const BatchView: React.FC = () => {
     setForm(null); await refresh();
   };
   const bulkParsed = useMemo(() => (bulk ? parseBatchLines(bulk.text) : []), [bulk]);
+  const bulkInputs = () => bulkParsed.map((item) => ({
+    name: item.name.trim() || item.command.trim().slice(0, 40),
+    command: item.command,
+    cwd: bulk?.cwd.trim() || '',
+    killBeforeStart: bulk?.killBeforeStart ?? true
+  }));
+  const openBulkEdit = () => {
+    const chosen = selectedIds.map((id) => byId.get(id)).filter((item): item is BatchCommand => !!item);
+    if (chosen.length < 2) return;
+    const oneLine = (value: string) => value.replace(/\r?\n/g, ' ').trim();
+    const cwd = chosen.every((item) => item.cwd === chosen[0].cwd) ? chosen[0].cwd : '';
+    const killBeforeStart = chosen.every((item) => item.killBeforeStart === chosen[0].killBeforeStart) ? chosen[0].killBeforeStart : true;
+    setForm(null);
+    setBulk({
+      text: chosen.map((item) => `${oneLine(item.name)} :: ${oneLine(item.command)}`).join('\n'),
+      cwd,
+      killBeforeStart,
+      ids: chosen.map((item) => item.id)
+    });
+  };
   const saveBulk = async () => {
     if (!bulk || !bulkParsed.length) return;
-    const result = await window.closedport.addBatchCommands(bulkParsed.map((item) => ({ ...item, cwd: bulk.cwd.trim(), killBeforeStart: bulk.killBeforeStart })));
+    const inputs = bulkInputs();
+    const result = bulk.ids.length
+      ? await window.closedport.updateBatchCommands(bulk.ids, inputs)
+      : await window.closedport.addBatchCommands(inputs);
     if (!result.success) { setError(result.message || t('scripts.saveFailed')); return; }
     setBulk(null); await refresh();
   };
@@ -3137,12 +3213,13 @@ const BatchView: React.FC = () => {
     <div className="toolbar">
       <input type="search" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder={t('batch.filter')} style={{ maxWidth: 280 }} />
       <button className="primary" onClick={() => { setBulk(null); setForm({ ...EMPTY_BATCH_FORM }); }}>{t('batch.add')}</button>
-      <button onClick={() => { setForm(null); setBulk({ text: '', cwd: '', killBeforeStart: true }); }}>{t('batch.bulkAdd')}</button>
+      <button onClick={() => { setForm(null); setBulk({ text: '', cwd: '', killBeforeStart: true, ids: [] }); }}>{t('batch.bulkAdd')}</button>
       <button onClick={() => void refresh()}>{t('common.refresh')}</button>
       <span className="batch-divider" />
       <button className="primary" disabled={busy || !selectedIds.length} onClick={() => void act(selectedIds, 'start')}>{t('batch.runSelected')}</button>
       <button disabled={busy || !selectedIds.length} onClick={() => void act(selectedIds, 'restart')}>{t('batch.restartSelected')}</button>
       <button className="danger" disabled={busy || !selectedIds.length} onClick={() => void act(selectedIds, 'stop')}>{t('batch.stopSelected')}</button>
+      <button disabled={busy || selectedIds.length < 2} onClick={openBulkEdit}>{t('batch.bulkEdit')}</button>
       <button className="ghost" disabled={busy || !selectedIds.length} onClick={() => void remove(selectedIds)}>{t('common.delete')}</button>
       <div className="spacer" />
       <span className="badge">{selectedIds.length ? `${t('batch.selected')} ${selectedIds.length} / ` : ''}{filtered.length} {t('scripts.entries')}</span>
@@ -3161,7 +3238,7 @@ const BatchView: React.FC = () => {
       </div>
     </div>}
     {bulk && <div className="host-bulk-editor">
-      <div className="host-bulk-heading"><strong>{t('batch.bulkTitle')}</strong><span>{t('batch.bulkHint')}</span></div>
+      <div className="host-bulk-heading"><strong>{bulk.ids.length ? t('batch.bulkEditTitle') : t('batch.bulkTitle')}</strong><span>{bulk.ids.length ? t('batch.bulkEditHint') : t('batch.bulkHint')}</span></div>
       <textarea value={bulk.text} onChange={(event) => setBulk({ ...bulk, text: event.target.value })} placeholder={'web :: npm run dev\napi :: cargo run -p server\n# comment\nping 127.0.0.1 -t'} />
       <div className="host-bulk-actions">
         <input type="text" value={bulk.cwd} onChange={(event) => setBulk({ ...bulk, cwd: event.target.value })} placeholder={t('batch.cwdPlaceholder')} style={{ maxWidth: 360 }} />
@@ -3172,14 +3249,30 @@ const BatchView: React.FC = () => {
         <button onClick={() => setBulk(null)}>{t('common.cancel')}</button>
       </div>
     </div>}
-    <div className="scripts-layout">
+    <div
+      className={`scripts-layout batch-split${resizing ? ' is-resizing' : ''}`}
+      ref={layoutRef}
+      style={listWidth != null ? ({ '--batch-list-width': `${listWidth}px` } as React.CSSProperties) : undefined}
+    >
       <div className="scripts-list content">
-        {!filtered.length ? <div className="empty">{t('batch.empty')}</div> : <table className="table"><thead><tr>
-          <th className="batch-order-cell" title={t('batch.dragHint')} aria-label={t('batch.dragHint')} />
-          <th style={{ width: 32 }}><input type="checkbox" checked={allChecked} onChange={toggleAll} /></th>
-          <th>{t('scripts.col.name')}</th><th>{t('scripts.col.command')}</th>
-          <th style={{ width: 96 }}>{t('batch.col.status')}</th><th style={{ width: 70 }}>PID</th>
-          <th style={{ width: 250 }}>{t('scripts.col.action')}</th>
+        {!filtered.length ? <div className="empty">{t('batch.empty')}</div> : <table className="table batch-table">
+        <colgroup>
+          <col className="batch-col-handle" />
+          <col className="batch-col-check" />
+          <col className="batch-col-cmd" />
+          <col className="batch-col-pid" />
+          <col className="batch-col-name" />
+          <col className="batch-col-status" />
+          <col className="batch-col-actions" />
+        </colgroup>
+        <thead><tr>
+          <th className="batch-order-cell batch-col-handle" title={t('batch.dragHint')} aria-label={t('batch.dragHint')} />
+          <th className="batch-col-check"><input type="checkbox" checked={allChecked} onChange={toggleAll} /></th>
+          <th className="batch-col-cmd">{t('scripts.col.command')}</th>
+          <th className="batch-pin batch-col-pid">PID</th>
+          <th className="batch-pin batch-col-name">{t('scripts.col.name')}</th>
+          <th className="batch-pin batch-col-status">{t('batch.col.status')}</th>
+          <th className="batch-pin batch-col-actions">{t('scripts.col.action')}</th>
         </tr></thead><tbody>{filtered.map((item) => {
           const status = statusOf(item);
           const rowClass = [
@@ -3238,11 +3331,11 @@ const BatchView: React.FC = () => {
               </span>
             </td>
             <td><input type="checkbox" checked={selected.has(item.id)} onChange={() => toggle(item.id)} /></td>
-            <td>{item.name}</td>
-            <td className="mono" title={item.cwd ? `${item.command}\n${t('batch.cwd')}: ${item.cwd}` : item.command}>{item.command}</td>
-            <td><span className={`batch-status ${status.cls}`}>{status.text}</span></td>
-            <td className="mono" title={item.running ? '' : t('batch.lastPid')} style={{ opacity: item.running ? 1 : 0.55 }}>{item.running ? item.pid : item.lastPid ?? '—'}</td>
-            <td><div className="row-actions">
+            <td className="batch-col-cmd mono" title={item.cwd ? `${item.command}\n${t('batch.cwd')}: ${item.cwd}` : item.command}>{item.command}</td>
+            <td className="batch-pin batch-col-pid mono" title={item.running ? '' : t('batch.lastPid')}><span style={{ opacity: item.running ? 1 : 0.55 }}>{item.running ? item.pid : item.lastPid ?? '—'}</span></td>
+            <td className="batch-pin batch-col-name" title={item.name}>{item.name}</td>
+            <td className="batch-pin batch-col-status" title={status.text}><span className={`batch-status ${status.cls}`}>{status.text}</span></td>
+            <td className="batch-pin batch-col-actions"><div className="row-actions">
               {rowActions(item)}
               <button className="ghost" onClick={() => openTab(item.id)}>{t('batch.view')}</button>
               <button className="ghost" onClick={() => { setBulk(null); setForm({ id: item.id, name: item.name, command: item.command, cwd: item.cwd, killBeforeStart: item.killBeforeStart }); }}>{t('common.edit')}</button>
@@ -3250,6 +3343,28 @@ const BatchView: React.FC = () => {
           </tr>;
         })}</tbody></table>}
       </div>
+      <div
+        className="batch-splitter"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t('batch.resizePanes')}
+        title={t('batch.resizePanes')}
+        tabIndex={0}
+        onPointerDown={startResize}
+        onDoubleClick={resetListWidth}
+        onKeyDown={(event) => {
+          if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+          const layout = layoutRef.current;
+          const list = layout?.querySelector('.scripts-list');
+          if (!layout || !list) return;
+          event.preventDefault();
+          const current = list.getBoundingClientRect().width;
+          const delta = (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 80 : 24);
+          const rect = layout.getBoundingClientRect();
+          const next = Math.round(Math.min(rect.width - 280, Math.max(320, current + delta)));
+          rememberListWidth(next);
+        }}
+      />
       <section className={`script-output ${fullscreen ? 'batch-fullscreen' : ''}`}>
         <div className="batch-tabs">
           <button
